@@ -238,7 +238,7 @@ Test-NetConnection 192.168.178.169 -Port 443   # from the PC: TcpTestSucceeded F
 
 ### Snapshots
 
-- `firewall-ok` (both VMs)
+- `firewall-ok` (Pi-VM only, missed on the vps; `passthrough-ok` includes the firewall)
 
 ## Open
 
