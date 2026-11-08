@@ -240,10 +240,73 @@ Test-NetConnection 192.168.178.169 -Port 443   # from the PC: TcpTestSucceeded F
 
 - `firewall-ok` (both VMs)
 
+## Phase 4: TLS passthrough (vps)
+
+### Design
+
+- nginx `stream` (layer 4), no HTTP on the vps at all; DNAT via nftables would need `ip_forward = 1`, see ADR 0007
+- `ssl_preread` reads the SNI from the ClientHello without decrypting, only known hostnames go into the tunnel, everything else is closed on the vps
+- `proxy_protocol on`: the Pi gets the real client IP in a plain text header before the TLS stream
+- test hostname `cloud.homelab.test` (`.test` is reserved), replaced by the real domain later
+- config: `configs/vps/etc/nginx/stream.d/gateway.conf`
+
+### Install (vps)
+
+```bash
+sudo apt install nginx libnginx-mod-stream
+ls /etc/nginx/modules-enabled/        # needs an entry with "stream"
+sudo rm /etc/nginx/sites-enabled/default
+sudo mkdir -p /etc/nginx/stream.d
+echo 'include /etc/nginx/stream.d/*.conf;' | sudo tee -a /etc/nginx/nginx.conf
+tail -3 /etc/nginx/nginx.conf         # include must come after the closing } of http
+```
+
+Copy `gateway.conf` from the repo (Windows):
+
+```powershell
+scp configs/vps/etc/nginx/stream.d/gateway.conf <USER>@<VPS_IP>:/tmp/gateway.conf
+```
+
+```bash
+sudo install -m 0644 -o root -g root /tmp/gateway.conf /etc/nginx/stream.d/gateway.conf
+sudo nginx -t
+sudo systemctl reload nginx
+sudo ss -tlnp | grep ':443'           # nginx on 0.0.0.0:443 and [::]:443
+sudo etckeeper commit "add nginx stream passthrough"
+```
+
+- the `stream` block has to be in the main context, `conf.d/*.conf` is included inside `http` and doesn't work for it
+
+### Tests
+
+Pi-VM, prints the first line of one connection and exits:
+
+```bash
+sudo nc -l 443 | head -n 1
+```
+
+From the PC (`curl.exe`, not the PowerShell alias `curl`):
+
+```powershell
+curl.exe -vk --max-time 5 --resolve cloud.homelab.test:443:192.168.178.38 https://cloud.homelab.test/
+curl.exe -vk --max-time 5 https://192.168.178.38/
+curl.exe -vk --max-time 5 --resolve other.test:443:192.168.178.38 https://other.test/
+```
+
+- known name: Pi-VM shows `PROXY TCP4 192.168.178.197 192.168.178.38 <port> 443`, curl times out (no TLS server on the Pi yet)
+- IP only / unknown name: curl fails at once, nothing arrives on the Pi-VM, `/var/log/nginx/error.log` on the vps shows `connect() failed (111)` to `127.0.0.1:1`
+- reboot vps: `systemctl is-active nginx`, `ss` shows 443 again
+
+### Snapshots
+
+- `passthrough-ok` (vps)
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
 - [ ] phase 5: if Nextcloud runs in Docker, revisit the Pi firewall (Docker needs forwarding, published ports go through the forward chain)
 - [ ] phase 6: harden SSH on the real VPS (open to the internet there)
+- [ ] phase 5: reverse proxy on the Pi has to expect the PROXY header (`listen 443 ssl proxy_protocol`) and take the real IP only from `10.99.0.1`
+- [ ] phase 5: certificate on the Pi, TLS-ALPN-01 works through the passthrough without opening port 80
 - [ ] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, or disable auto provisioning)
 - [ ] reminder before the client secret expires
