@@ -23,6 +23,7 @@ Shell commands live in `NOTES.md` and later in `setup.sh`.
 | `clean`        | fresh install, updated, history + etckeeper   |
 | `vor-wireguard`| before phase 2                                |
 | `wireguard-ok` | tunnel working and tested                     |
+| `firewall-ok`  | nftables active and tested                    |
 
 ## Phase 1: Entra ID
 
@@ -70,7 +71,7 @@ Exchange public keys between the VMs by hand (they're not secret).
 
 ```bash
 sudo wg show                      # latest handshake + transfer on both sides
-ping -c 3 10.99.0.1               # from Pi-VM
+ping -c 3 10.99.0.1               # from Pi-VM, blocked by the vps firewall since phase 3
 ping -c 3 10.99.0.2               # from vps
 cat /proc/sys/net/ipv4/ip_forward # must be 0 on both
 ```
@@ -84,6 +85,32 @@ Notes:
 - `active (exited)` for `wg-quick@wg-gw` is normal
 - `sysctl` is in `/usr/sbin`, not in the user PATH on Debian
 - etckeeper may have picked up the WireGuard files in a "daily autocommit", check with `sudo git -C /etc ls-files wireguard`
+
+## Phase 3: Firewall
+
+Rules: `configs/vps/etc/nftables.conf`, `configs/pi/etc/nftables.conf`, commands in `NOTES.md`.
+
+- before loading on the vps: `WG_PORT` in the file has to match `sudo wg show wg-gw listen-port`
+- locking yourself out is harmless in the VMs (the VMware console works without network); on the real VPS keep the provider's web console ready
+
+### Verify
+
+Listener on the Pi-VM in a separate terminal: `sudo nc -lk 443` (package `netcat-openbsd`, needed on both VMs).
+
+| From  | Command                                        | Expected                   |
+|-------|------------------------------------------------|----------------------------|
+| PC    | new SSH connection to both VMs                 | works                      |
+| Pi-VM | `sudo wg show`                                 | recent handshake           |
+| vps   | `ping -c 3 10.99.0.2`                          | works                      |
+| Pi-VM | `ping -c 3 -W 2 10.99.0.1`                     | 100 % packet loss          |
+| vps   | `nc -zv -w 3 10.99.0.2 443`                    | succeeded                  |
+| vps   | `nc -zv -w 3 10.99.0.2 22`                     | timeout                    |
+| Pi-VM | `nc -zv -w 3 10.99.0.1 22`                     | timeout                    |
+| PC    | `Test-NetConnection 192.168.178.169 -Port 443` | `TcpTestSucceeded : False` |
+
+- the two timeouts matter most: apart from vps to Pi on 443, the tunnel can't be used to open connections in either direction
+- SSH sessions opened before the rules were loaded keep working (`established`), only a new connection tells you something
+- reboot both VMs: `sudo nft list ruleset` shows table `inet gateway`, tunnel comes back up
 
 ## Open
 
