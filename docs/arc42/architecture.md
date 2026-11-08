@@ -220,7 +220,7 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | only one Global Admin, lockout if the account is lost                 | recovery code stored safely                                                |
 | public share links in Nextcloud work without login                    | disable if not needed                                                       |
 | VM IPs come from DHCP, a changed IP breaks the tunnel endpoint in testing | fixed leases in the router (open)                                      |
-| Docker on the Pi turns on forwarding and routes published ports through the forward chain, past the input rules | revisit the Pi firewall in phase 5 if Nextcloud runs in Docker |
+| Docker on the Pi turns on forwarding and routes published ports through the forward chain, past the input rules | not relevant, Nextcloud runs natively without Docker (phase 5) |
 | SSH on the real VPS is reachable from the internet                    | key-only login and further hardening in phase 6                            |
 | whoever reaches port 443 on the Pi can fake the client IP in the PROXY header | firewall allows 443 only from `10.99.0.1`; reverse proxy trusts the header only from there |
 | SNI filter is no access control, the domain becomes public via certificate transparency | only meant to cut scanner noise, login and updates on the Pi remain the real protection |

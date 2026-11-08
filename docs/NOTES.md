@@ -302,12 +302,125 @@ curl.exe -vk --max-time 5 --resolve other.test:443:192.168.178.38 https://other.
 
 - `passthrough-ok` (vps)
 
+## Phase 5: Nextcloud (Pi-VM)
+
+- TODO: install steps (PHP, MariaDB, Nextcloud, certificate, nginx site), written up once user_oidc works
+- nginx site: `configs/pi/etc/nginx/sites-available/nextcloud.conf`
+
+### Setup checks
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ status
+sudo -u www-data php occ setupchecks
+```
+
+- the CLI skips some checks (OPcache, PHP memory limit, remote address), those only show under Administration settings → Overview (`/settings/admin/overview`)
+- the database findings are only listed there too ("Show the findings")
+- "Errors in the log" counts the last 7 days, old entries keep the warning around
+
+### Self checks over loopback
+
+Nextcloud tests its own URLs (`.well-known`, `.mjs`, `.js.map`, data directory, security headers) by calling `overwrite.cli.url`. The tunnel listener only accepts connections with a PROXY header, so these requests failed and most network checks were skipped.
+
+- second listener `listen 127.0.0.1:443 ssl;` without `proxy_protocol` in the Nextcloud server block; nginx picks the listen parameters by the local address of the connection, so both can live next to each other
+- loopback is already allowed in nftables (`iifname "lo" accept`)
+- on the real Pi the hosts entry gets the real domain
+
+```bash
+echo '127.0.0.1 cloud.homelab.test' | sudo tee -a /etc/hosts
+sudo apt install curl
+curl -kI https://cloud.homelab.test/status.php   # HTTP/2 200
+```
+
+### Memory cache and file locking
+
+APCu as local cache, Redis for locking and distributed cache, Redis only on a unix socket (no TCP port).
+
+```bash
+sudo apt install php-apcu redis-server php-redis
+echo 'apc.enable_cli=1' | sudo tee -a /etc/php/8.4/mods-available/apcu.ini
+sudo sed -i 's/^port 6379/port 0/' /etc/redis/redis.conf
+sudo sed -i 's|^# unixsocket .*|unixsocket /run/redis/redis-server.sock|' /etc/redis/redis.conf
+sudo sed -i 's/^# unixsocketperm .*/unixsocketperm 770/' /etc/redis/redis.conf
+grep -E '^(port|unixsocket)' /etc/redis/redis.conf   # port 0, socket path, perm 770
+sudo usermod -aG redis www-data
+sudo systemctl restart redis-server php8.4-fpm
+```
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ config:system:set memcache.local --value='\OC\Memcache\APCu'
+sudo -u www-data php occ config:system:set memcache.locking --value='\OC\Memcache\Redis'
+sudo -u www-data php occ config:system:set memcache.distributed --value='\OC\Memcache\Redis'
+sudo -u www-data php occ config:system:set redis host --value='/run/redis/redis-server.sock'
+sudo -u www-data php occ config:system:set redis port --type=integer --value=0
+sudo -u www-data redis-cli -s /run/redis/redis-server.sock ping   # PONG, also after a reboot
+```
+
+- without `apc.enable_cli=1` occ and cron fail once APCu is the local cache
+- restarting Redis while Nextcloud runs logs `Redis server went away` once, harmless
+
+### Other settings
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ config:system:set default_phone_region --value="DE"
+sudo -u www-data php occ config:system:set maintenance_window_start --type=integer --value=1   # hour in UTC
+sudo -u www-data php occ maintenance:repair --include-expensive
+```
+
+### MariaDB
+
+`configs/pi/etc/mysql/mariadb.conf.d/90-nextcloud.cnf` raises `innodb_log_file_size` to 256M (the setup check warns below 128M). Own drop-in instead of editing `50-server.cnf`, so package updates don't touch it.
+
+```powershell
+scp configs/pi/etc/mysql/mariadb.conf.d/90-nextcloud.cnf <USER>@<PI_IP>:/tmp/90-nextcloud.cnf
+```
+
+```bash
+sudo install -m 0644 -o root -g root /tmp/90-nextcloud.cnf /etc/mysql/mariadb.conf.d/90-nextcloud.cnf
+sudo systemctl restart mariadb
+sudo mariadb -e "SELECT @@innodb_log_file_size/1024/1024 AS MiB;"   # 256
+```
+
+- MariaDB resizes the redo log on restart by itself
+- slow query log stays off, only a hint in the setup check and it means extra writes
+
+### HSTS
+
+- `Strict-Transport-Security` with `max-age=15552000`, the minimum the setup check wants
+- also needed in the static file location: it has its own `add_header` lines, so nothing is inherited from the server block
+- browsers ignore HSTS over an untrusted certificate, so it can stay on with the self-signed test cert
+
+```bash
+curl -skI https://cloud.homelab.test/status.php | grep -i strict-transport
+curl -skI https://cloud.homelab.test/core/img/favicon.ico | grep -i strict-transport
+```
+
+### Accepted hints
+
+- AppAPI deploy daemon, email server, server ID, Imagick without SVG: not needed for now
+- 2FA not enforced: users log in through Entra with MFA, the local admin is handled in hardening
+- `nginx -t` warns about a duplicate `wasm` type: the Nextcloud sample adds it on top of Debian's `mime.types`
+
+### After the changes
+
+```bash
+sudo etckeeper commit "nextcloud tuning: memcache, redis, mariadb, loopback listener, hsts"
+sudo reboot
+```
+
+After the reboot: `redis-cli ... ping`, `occ setupchecks`, no new errors in the log.
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
-- [ ] phase 5: if Nextcloud runs in Docker, revisit the Pi firewall (Docker needs forwarding, published ports go through the forward chain)
+- [x] phase 5: if Nextcloud runs in Docker, revisit the Pi firewall (not needed, Nextcloud runs natively)
 - [ ] phase 6: harden SSH on the real VPS (open to the internet there)
-- [ ] phase 5: reverse proxy on the Pi has to expect the PROXY header (`listen 443 ssl proxy_protocol`) and take the real IP only from `10.99.0.1`
+- [x] phase 5: reverse proxy on the Pi has to expect the PROXY header (`listen 443 ssl proxy_protocol`) and take the real IP only from `10.99.0.1`
+- [ ] phase 5: write up the install steps (PHP, MariaDB, Nextcloud, certificate, nginx site)
+- [ ] phase 6: local admin `ncadmin`: enforce 2FA or keep it off the internet once user_oidc works
 - [ ] phase 5: certificate on the Pi, TLS-ALPN-01 works through the passthrough without opening port 80
 - [ ] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, or disable auto provisioning)
 - [ ] reminder before the client secret expires
