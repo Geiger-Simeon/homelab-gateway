@@ -48,8 +48,9 @@ sudo apt install etckeeper
 ### Pi-VM: separate data disk
 
 - disk 1 (20 GB): system, disk 2 (30 GB): data, mirrors SD card + SSD on the real Pi
-- data disk mounted via UUID in `/etc/fstab`
-- TODO: mount point and fstab line
+- data disk mounted via UUID in `/etc/fstab`, mount point `/mnt/data` (`/dev/sdb1`, ext4)
+- check: `findmnt /mnt/data`
+- TODO: fstab line
 
 ### Snapshots
 
