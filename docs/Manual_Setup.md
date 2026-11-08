@@ -18,12 +18,13 @@ Shell commands live in `NOTES.md` and later in `setup.sh`.
 
 ### Snapshots
 
-| Name           | State                                         |
-|----------------|-----------------------------------------------|
-| `clean`        | fresh install, updated, history + etckeeper   |
-| `vor-wireguard`| before phase 2                                |
-| `wireguard-ok` | tunnel working and tested                     |
-| `firewall-ok`  | nftables active and tested (Pi-VM only, missed on the vps) |
+| Name           | State                                                         |
+|----------------|---------------------------------------------------------------|
+| `clean`        | fresh install, updated, history + etckeeper                   |
+| `vor-wireguard`| before phase 2                                                |
+| `wireguard-ok` | tunnel working and tested                                     |
+| `firewall-ok`  | nftables active and tested (Pi-VM only, missed on the vps)    |
+| `passthrough-ok` | nginx stream on the vps tested (vps only)                   |
 
 ## Phase 1: Entra ID
 
@@ -111,6 +112,24 @@ Listener on the Pi-VM in a separate terminal: `sudo nc -lk 443` (package `netcat
 - the two timeouts matter most: apart from vps to Pi on 443, the tunnel can't be used to open connections in either direction
 - SSH sessions opened before the rules were loaded keep working (`established`), only a new connection tells you something
 - reboot both VMs: `sudo nft list ruleset` shows table `inet gateway`, tunnel comes back up
+
+## Phase 4: TLS passthrough
+
+Config: `configs/vps/etc/nginx/stream.d/gateway.conf`, commands in `NOTES.md`. Nothing manual on the Pi-VM.
+
+### Verify
+
+Listener on the Pi-VM, restart it before each test: `sudo nc -l 443 | head -n 1`
+
+| From | Command | Expected |
+|------|---------|----------|
+| PC   | `curl.exe -vk --max-time 5 --resolve cloud.homelab.test:443:192.168.178.38 https://cloud.homelab.test/` | Pi-VM shows `PROXY TCP4 <PC IP> 192.168.178.38 <port> 443`, curl times out |
+| PC   | `curl.exe -vk --max-time 5 https://192.168.178.38/` | curl fails at once, nothing on the Pi-VM |
+| PC   | `curl.exe -vk --max-time 5 --resolve other.test:443:192.168.178.38 https://other.test/` | curl fails at once, nothing on the Pi-VM |
+| vps  | `sudo tail -5 /var/log/nginx/error.log` | `connect() failed (111)` to `127.0.0.1:1` for the two negative tests |
+
+- the PC IP in the PROXY line shows the Pi gets the real client, not `10.99.0.1`
+- reboot vps: nginx comes back on its own, positive test works again
 
 ## Open
 
