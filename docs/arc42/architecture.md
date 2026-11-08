@@ -96,10 +96,10 @@ flowchart LR
 |--------------------|------|------------------------------------------------------------------|--------------|
 | WireGuard server   | VPS  | endpoint of the tunnel, listens on UDP 51820                     | done (VM)    |
 | Firewall           | VPS  | nftables, only SSH, 443 and WireGuard, nothing new from the tunnel | done (VM)  |
-| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 into the tunnel  | planned      |
+| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames into the tunnel, adds the PROXY header | done (VM) |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
 | Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
-| Reverse proxy      | Pi   | TLS termination, certificate, forwards to Nextcloud              | planned      |
+| Reverse proxy      | Pi   | reads the PROXY header, TLS termination, certificate, forwards to Nextcloud | planned |
 | Nextcloud          | Pi   | application, data on the separate data disk                      | exists on the real Pi, VM planned |
 | `user_oidc`        | Pi   | OIDC login against Entra ID                                      | planned      |
 
@@ -154,6 +154,8 @@ Inbound rules (nftables, table `inet gateway`, files in `configs/<host>/etc/nfta
 - outgoing traffic is not filtered
 - production: SSH on the VPS is reachable from the internet (hardening in phase 6), the real Pi needs additional rules for its existing VPN
 
+TLS passthrough on the VPS: nginx `stream`, config in `configs/vps/etc/nginx/stream.d/gateway.conf`. Known hostnames go to `10.99.0.2:443` with a PROXY protocol header, everything else is closed on the VPS ([ADR 0010](../adr/0010-pass-the-client-ip-with-the-proxy-protocol.md), [ADR 0011](../adr/0011-forward-only-known-hostnames-on-the-vps.md)). The VPS doesn't serve HTTP, the nginx default site is removed.
+
 The Pi also runs an existing WireGuard VPN for my own devices, kept separate from `wg-gw`.
 
 # 8. Cross-cutting Concepts
@@ -189,6 +191,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0007](../adr/0007-restrict-tunnel-to-32-without-ip-forwarding.md) | Tunnel restricted to `/32`, no IP forwarding | accepted |
 | [0008](../adr/0008-use-a-separate-tunnel-wg-gw.md) | Separate tunnel `wg-gw` / `10.99.0.0/24` | accepted |
 | [0009](../adr/0009-use-nftables-with-a-dedicated-table.md) | nftables with a dedicated table `inet gateway` | accepted |
+| [0010](../adr/0010-pass-the-client-ip-with-the-proxy-protocol.md) | Client IP to the Pi via PROXY protocol | accepted |
+| [0011](../adr/0011-forward-only-known-hostnames-on-the-vps.md) | Only known hostnames (SNI) are forwarded | accepted |
 
 # 10. Quality Requirements
 
@@ -199,6 +203,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | Confidentiality | the VPS is compromised                                                   | attacker sees only encrypted TLS              |
 | Isolation       | an attacker on the VPS scans the tunnel                                  | only the reverse proxy port on the Pi answers |
 | Isolation       | something on the Pi opens a connection to the VPS through the tunnel     | dropped by the VPS firewall                   |
+| Isolation       | a scanner connects to the VPS IP without or with an unknown hostname     | closed on the VPS, nothing reaches the Pi     |
+| Access control  | an attacker tries passwords against the login                            | brute force protection on the Pi throttles by the real client IP (PROXY protocol) |
 | Access control  | an unassigned Entra user tries to log in                                 | rejected by Entra (AADSTS50105)               |
 | Availability    | the VPS reboots                                                          | tunnel is back within ~25 s without manual work |
 
@@ -216,6 +222,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | VM IPs come from DHCP, a changed IP breaks the tunnel endpoint in testing | fixed leases in the router (open)                                      |
 | Docker on the Pi turns on forwarding and routes published ports through the forward chain, past the input rules | revisit the Pi firewall in phase 5 if Nextcloud runs in Docker |
 | SSH on the real VPS is reachable from the internet                    | key-only login and further hardening in phase 6                            |
+| whoever reaches port 443 on the Pi can fake the client IP in the PROXY header | firewall allows 443 only from `10.99.0.1`; reverse proxy trusts the header only from there |
+| SNI filter is no access control, the domain becomes public via certificate transparency | only meant to cut scanner noise, login and updates on the Pi remain the real protection |
 
 # 12. Glossary
 
@@ -226,3 +234,5 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | OIDC             | OpenID Connect, login protocol on top of OAuth 2.0                                 |
 | Assignment required | Entra setting: only users assigned to the app can sign in                       |
 | ADR              | architecture decision record                                                       |
+| SNI              | server name indication, hostname sent unencrypted in the TLS ClientHello           |
+| PROXY protocol   | header in front of a forwarded TCP connection that carries the original client and server address |
