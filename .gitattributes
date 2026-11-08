@@ -1,0 +1,6 @@
+# store text files with LF in the repo
+* text=auto
+
+# configs and scripts end up on linux, keep LF
+configs/** text eol=lf
+*.sh text eol=lf

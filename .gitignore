@@ -1,0 +1,9 @@
+#IntelliJ Settings
+.idea/
+
+#Environment Variables
+.env
+
+#real WireGuard configs contain private keys, only templates go in the repo
+configs/**/wireguard/*.conf
+*.key
