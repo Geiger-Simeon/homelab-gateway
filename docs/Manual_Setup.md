@@ -1,0 +1,91 @@
+# Manual setup
+
+Steps that can't be scripted (or not reasonably), plus how to verify each phase.
+Shell commands live in `NOTES.md` and later in `setup.sh`.
+
+## Test environment (VMware)
+
+- VMware Workstation Pro, network mode bridged
+- Virtual Network Editor: VMnet0 bound to the physical adapter explicitly, not "Automatic"
+- both VMs: Debian 13 netinst, only "SSH server" and "standard system utilities"
+- Pi-VM: two virtual disks, 20 GB system + 30 GB data
+- TODO: fixed DHCP lease in the router for both VMs
+
+| VM    | LAN IP          | Tunnel IP |
+|-------|-----------------|-----------|
+| vps   | 192.168.178.38  | 10.99.0.1 |
+| Pi-VM | 192.168.178.169 | 10.99.0.2 |
+
+### Snapshots
+
+| Name           | State                                         |
+|----------------|-----------------------------------------------|
+| `clean`        | fresh install, updated, history + etckeeper   |
+| `vor-wireguard`| before phase 2                                |
+| `wireguard-ok` | tunnel working and tested                     |
+
+## Phase 1: Entra ID
+
+Done in the Entra admin center (`entra.microsoft.com`).
+
+1. tenant: sign up for Azure for Students with the private Microsoft account (not the university account), check that the active directory is the new one and not "Microsoft Services"
+2. admin account: 2-step verification on the private Microsoft account
+3. security defaults: Entra ID > Overview > Properties > manage security defaults > enabled
+4. users (Entra ID > Users > New user > Create new user):
+    - `simeon@<TENANT>.onmicrosoft.com` for the Nextcloud login, no roles
+    - `test-unassigned@<TENANT>.onmicrosoft.com` for negative tests, keep it
+    - first sign in for both at `myaccount.microsoft.com` in a private window: new password, MFA
+5. app registration (Entra ID > App registrations > New registration):
+    - name `nextcloud`, single tenant, no redirect URI yet
+    - Certificates & secrets: new client secret, copy the value to the password manager, expires `<DATE>`
+    - API permissions: Microsoft Graph delegated `openid`, `profile`, `email` (plus default `User.Read`), grant admin consent
+6. enterprise application (Entra ID > Enterprise applications > nextcloud):
+    - Properties: enabled for sign in yes, assignment required yes, visible to users no
+    - Users and groups: assign only `simeon@`
+
+Values (not secret, but placeholders here):
+
+- tenant ID: `<TENANT_ID>`
+- client ID: `<CLIENT_ID>`
+- discovery URI: `https://login.microsoftonline.com/<TENANT_ID>/v2.0/.well-known/openid-configuration`
+
+### Verify
+
+Temporarily add redirect URI `http://localhost` (Authentication > Add a platform > Web), then open in a private window:
+
+```
+https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/authorize?client_id=<CLIENT_ID>&response_type=code&redirect_uri=http%3A%2F%2Flocalhost&scope=openid%20profile%20email&response_mode=query
+```
+
+- the page always fails (nothing runs on localhost), the result is in the address bar
+- `?code=...` = login ok, `?error=...` or a Microsoft error page = denied
+- expected: `simeon@` ok, `test-unassigned@` denied (AADSTS50105), Global Admin ok (bypass, see `docs/arc42/architecture.md` section 11)
+- remove the `http://localhost` redirect URI afterwards
+
+## Phase 2: WireGuard
+
+Exchange public keys between the VMs by hand (they're not secret).
+
+### Verify
+
+```bash
+sudo wg show                      # latest handshake + transfer on both sides
+ping -c 3 10.99.0.1               # from Pi-VM
+ping -c 3 10.99.0.2               # from vps
+cat /proc/sys/net/ipv4/ip_forward # must be 0 on both
+```
+
+- reboot vps: handshake comes back within ~25 s without touching the Pi
+- reboot Pi-VM: tunnel comes up on its own
+- logs: `sudo journalctl -u wg-quick@wg-gw`
+
+Notes:
+
+- `active (exited)` for `wg-quick@wg-gw` is normal
+- `sysctl` is in `/usr/sbin`, not in the user PATH on Debian
+- etckeeper may have picked up the WireGuard files in a "daily autocommit", check with `sudo git -C /etc ls-files wireguard`
+
+## Open
+
+- [ ] fixed DHCP leases for both VMs
+- [ ] reminder before the client secret expires
