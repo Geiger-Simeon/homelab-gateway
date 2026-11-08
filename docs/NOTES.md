@@ -163,7 +163,7 @@ sudo systemctl enable --now wg-quick@wg-gw
 
 ```bash
 sudo wg show                      # latest handshake, transfer on both sides
-ping -c 3 10.99.0.1               # from Pi-VM
+ping -c 3 10.99.0.1               # from Pi-VM, blocked by the vps firewall since phase 3
 ping -c 3 10.99.0.2               # from vps
 cat /proc/sys/net/ipv4/ip_forward # must be 0
 ```
@@ -177,9 +177,73 @@ cat /proc/sys/net/ipv4/ip_forward # must be 0
 
 - `wireguard-ok` (both VMs)
 
+## Phase 3: Firewall (nftables)
+
+### Design
+
+- one file per host: `configs/vps/etc/nftables.conf`, `configs/pi/etc/nftables.conf`
+- own table `inet gateway`, replaced on load (`table` + `delete table`), no `flush ruleset`, so rules from other tools (Docker later) survive a reload
+- input and forward: policy drop on both, output not filtered
+- vps: 22/tcp, 443/tcp, 51820/udp, ICMP echo; nothing new from `wg-gw` (the Pi can answer, but never open connections to the vps)
+- Pi-VM: from `wg-gw` only 443/tcp from `10.99.0.1`, SSH only from the LAN `192.168.178.0/24`, ICMP echo
+- Pi-VM needs no inbound rule for WireGuard, it initiates the connection and the replies match `established`
+
+### Install (both VMs)
+
+Copy from the repo (Windows):
+
+```powershell
+scp configs/vps/etc/nftables.conf <USER>@<VPS_IP>:/tmp/nftables.conf
+scp configs/pi/etc/nftables.conf <USER>@<PI_IP>:/tmp/nftables.conf
+```
+
+On each VM:
+
+```bash
+dpkg -l nftables | tail -1          # "ii" = installed, ships with Debian 13, service is off by default
+sudo install -m 0644 -o root -g root /tmp/nftables.conf /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf   # syntax check only, loads nothing
+sudo systemctl enable --now nftables
+sudo nft list ruleset
+sudo etckeeper commit "add nftables firewall"
+```
+
+- vps: `WG_PORT` in the file has to match `sudo wg show wg-gw listen-port`
+- run the etckeeper commit after `systemctl enable`, the symlink in `/etc/systemd/system/sysinit.target.wants/` belongs to the change
+- an apt run before the manual commit commits pending `/etc` changes on its own ("saving uncommitted changes in /etc prior to apt run")
+
+### Tests
+
+```bash
+sudo apt install netcat-openbsd   # both VMs
+sudo nc -lk 443                   # Pi-VM, separate terminal, blocks until Ctrl+C
+```
+
+Don't paste further commands after `nc -lk`, they end up as input for netcat.
+
+```bash
+ping -c 3 10.99.0.2               # from vps: works
+ping -c 3 -W 2 10.99.0.1          # from Pi-VM: 100 % loss
+nc -zv -w 3 10.99.0.2 443         # from vps: succeeded
+nc -zv -w 3 10.99.0.2 22          # from vps: timeout
+nc -zv -w 3 10.99.0.1 22          # from Pi-VM: timeout
+```
+
+```powershell
+Test-NetConnection 192.168.178.169 -Port 443   # from the PC: TcpTestSucceeded False
+```
+
+- SSH sessions opened before loading the rules keep working through `established`, test with a new connection
+- reboot both VMs: `sudo nft list ruleset` shows table `inet gateway`, tunnel comes back up
+
+### Snapshots
+
+- `firewall-ok` (both VMs)
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
-- [ ] phase 3: firewall (vps: only 443, WireGuard, SSH; Pi: only the proxy port from the tunnel)
+- [ ] phase 5: if Nextcloud runs in Docker, revisit the Pi firewall (Docker needs forwarding, published ports go through the forward chain)
+- [ ] phase 6: harden SSH on the real VPS (open to the internet there)
 - [ ] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, or disable auto provisioning)
 - [ ] reminder before the client secret expires

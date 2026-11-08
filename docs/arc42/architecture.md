@@ -84,7 +84,7 @@ flowchart LR
 |-------------------------|--------------------------------------------------------------------------------------------|
 | Reachable despite CGNAT | small VPS as public entry point, Pi builds an outgoing WireGuard tunnel to it              |
 | Confidentiality         | TLS passthrough on the VPS, TLS terminates on the Pi                                       |
-| Isolation               | tunnel only allows the peer `/32`, no IP forwarding, firewall allows only the proxy port   |
+| Isolation               | tunnel only allows the peer `/32`, no IP forwarding, nftables on both hosts: the Pi accepts only the proxy port from the VPS, the VPS accepts nothing new from the tunnel |
 | Access control          | OIDC login via Entra ID handled by Nextcloud (`user_oidc`), assignment required, MFA       |
 | Reproducibility         | manual exploration in VMs, commands logged in `NOTES.md`, later `setup.sh`                 |
 
@@ -95,8 +95,10 @@ flowchart LR
 | Building block     | Host | Responsibility                                                   | Status       |
 |--------------------|------|------------------------------------------------------------------|--------------|
 | WireGuard server   | VPS  | endpoint of the tunnel, listens on UDP 51820                     | done (VM)    |
+| Firewall           | VPS  | nftables, only SSH, 443 and WireGuard, nothing new from the tunnel | done (VM)  |
 | TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 into the tunnel  | planned      |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
+| Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
 | Reverse proxy      | Pi   | TLS termination, certificate, forwards to Nextcloud              | planned      |
 | Nextcloud          | Pi   | application, data on the separate data disk                      | exists on the real Pi, VM planned |
 | `user_oidc`        | Pi   | OIDC login against Entra ID                                      | planned      |
@@ -138,10 +140,19 @@ Notable:
 | VPS          | netcup VPS pico (not bought yet)      | VM `vps`, Debian 13    | 10.99.0.1  |
 | Raspberry Pi | Pi, OS on SD card, data on 1 TB SSD   | VM `Pi-VM`, Debian 13, 20 GB system + 30 GB data disk | 10.99.0.2 |
 
-Open ports (target state, phase 3):
+Inbound rules (nftables, table `inet gateway`, files in `configs/<host>/etc/nftables.conf`, see [ADR 0009](../adr/0009-use-nftables-with-a-dedicated-table.md)):
 
-- VPS: 443/tcp, WireGuard 51820/udp, SSH
-- Pi from the tunnel: only the reverse proxy port
+| Host | From                     | Allowed                                  |
+|------|--------------------------|------------------------------------------|
+| VPS  | anywhere                 | 22/tcp, 443/tcp, 51820/udp, ICMP echo    |
+| VPS  | `wg-gw`                  | nothing new, only replies                |
+| Pi   | `wg-gw`, from `10.99.0.1` | 443/tcp                                 |
+| Pi   | LAN `192.168.178.0/24`   | 22/tcp                                   |
+| Pi   | anywhere                 | ICMP echo                                |
+
+- forwarding is dropped on both hosts, in addition to `ip_forward = 0`
+- outgoing traffic is not filtered
+- production: SSH on the VPS is reachable from the internet (hardening in phase 6), the real Pi needs additional rules for its existing VPN
 
 The Pi also runs an existing WireGuard VPN for my own devices, kept separate from `wg-gw`.
 
@@ -177,6 +188,7 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0006](../adr/0006-use-microsoft-entra-id-via-azure-for-students.md) | Microsoft Entra ID via Azure for Students | accepted |
 | [0007](../adr/0007-restrict-tunnel-to-32-without-ip-forwarding.md) | Tunnel restricted to `/32`, no IP forwarding | accepted |
 | [0008](../adr/0008-use-a-separate-tunnel-wg-gw.md) | Separate tunnel `wg-gw` / `10.99.0.0/24` | accepted |
+| [0009](../adr/0009-use-nftables-with-a-dedicated-table.md) | nftables with a dedicated table `inet gateway` | accepted |
 
 # 10. Quality Requirements
 
@@ -186,6 +198,7 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 |-----------------|--------------------------------------------------------------------------|-----------------------------------------------|
 | Confidentiality | the VPS is compromised                                                   | attacker sees only encrypted TLS              |
 | Isolation       | an attacker on the VPS scans the tunnel                                  | only the reverse proxy port on the Pi answers |
+| Isolation       | something on the Pi opens a connection to the VPS through the tunnel     | dropped by the VPS firewall                   |
 | Access control  | an unassigned Entra user tries to log in                                 | rejected by Entra (AADSTS50105)               |
 | Availability    | the VPS reboots                                                          | tunnel is back within ~25 s without manual work |
 
@@ -201,6 +214,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | only one Global Admin, lockout if the account is lost                 | recovery code stored safely                                                |
 | public share links in Nextcloud work without login                    | disable if not needed                                                       |
 | VM IPs come from DHCP, a changed IP breaks the tunnel endpoint in testing | fixed leases in the router (open)                                      |
+| Docker on the Pi turns on forwarding and routes published ports through the forward chain, past the input rules | revisit the Pi firewall in phase 5 if Nextcloud runs in Docker |
+| SSH on the real VPS is reachable from the internet                    | key-only login and further hardening in phase 6                            |
 
 # 12. Glossary
 
