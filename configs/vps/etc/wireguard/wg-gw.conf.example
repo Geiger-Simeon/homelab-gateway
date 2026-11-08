@@ -1,0 +1,10 @@
+# /etc/wireguard/wg-gw.conf on the VPS
+[Interface]
+Address = 10.99.0.1/24
+ListenPort = 51820
+PrivateKey = <VPS_PRIVATE_KEY>
+
+[Peer]
+# pi
+PublicKey = <PI_PUBLIC_KEY>
+AllowedIPs = 10.99.0.2/32
