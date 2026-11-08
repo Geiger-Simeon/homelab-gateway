@@ -18,13 +18,13 @@ Shell commands live in `NOTES.md` and later in `setup.sh`.
 
 ### Snapshots
 
-| Name           | State                                         |
-|----------------|-----------------------------------------------|
-| `clean`        | fresh install, updated, history + etckeeper   |
-| `vor-wireguard`| before phase 2                                |
-| `wireguard-ok` | tunnel working and tested                     |
-| `firewall-ok`  | nftables active and tested                    |
-| `passthrough-ok` | nginx stream on the vps tested (vps only)   |
+| Name           | State                                                         |
+|----------------|---------------------------------------------------------------|
+| `clean`        | fresh install, updated, history + etckeeper                   |
+| `vor-wireguard`| before phase 2                                                |
+| `wireguard-ok` | tunnel working and tested                                     |
+| `firewall-ok`  | nftables active and tested (Pi-VM only, missed on the vps)    |
+| `passthrough-ok` | nginx stream on the vps tested (vps only)                   |
 
 ## Phase 1: Entra ID
 
