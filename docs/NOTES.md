@@ -67,7 +67,7 @@ sudo apt install etckeeper
 ### App registration "nextcloud"
 
 - supported account types: single tenant
-- redirect URI: added in phase 5 (`https://<HOST>/apps/user_oidc/code`, exact URI shown by user_oidc)
+- redirect URI: added in phase 5, see "user_oidc" there
 - API permissions (Microsoft Graph, delegated): `User.Read`, `openid`, `profile`, `email`, admin consent granted
 - client secret: password manager, expires `<DATE>`
 
@@ -76,7 +76,7 @@ sudo apt install etckeeper
 - enabled for users to sign in: yes
 - assignment required: yes
 - visible to users: no
-- assigned users: only `simeon@`
+- assigned users: only `simeon@`, with the app role `nc-user` since phase 5 (not "Default Access")
 
 ### Values
 
@@ -413,6 +413,94 @@ sudo reboot
 
 After the reboot: `redis-cli ... ping`, `occ setupchecks`, no new errors in the log.
 
+### user_oidc (Entra login)
+
+App version at install: `user_oidc` 8.13.0.
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ app:install user_oidc
+sudo -u www-data php occ user_oidc:provider --help   # lists all provider options
+```
+
+Provider `Entra`. The client secret goes in through an environment variable, so it shows up neither in the bash history (`HISTCONTROL=ignoredups` records commands with a leading space too) nor in the process list:
+
+```bash
+cd /var/www/nextcloud
+read -rsp "Client secret: " NC_OIDC_SECRET; echo
+export NC_OIDC_SECRET
+sudo --preserve-env=NC_OIDC_SECRET -u www-data php occ user_oidc:provider Entra \
+  --clientid="<CLIENT_ID>" \
+  --clientsecret-env=NC_OIDC_SECRET \
+  --discoveryuri="https://login.microsoftonline.com/<TENANT_ID>/v2.0/.well-known/openid-configuration" \
+  --unique-uid=0 \
+  --mapping-uid=oid
+unset NC_OIDC_SECRET
+sudo -u www-data php occ user_oidc:provider          # lists configured providers
+```
+
+- `--unique-uid=0 --mapping-uid=oid`: the Nextcloud user ID is the Entra object ID, see ADR 0012; decide before the first login, changing it later creates a new user
+- the identifier `Entra` is part of the backchannel logout URL, keep it; deleting the provider invalidates its accounts
+- running the command again with the same identifier updates the provider, e.g. after a wrong secret
+- a wrong secret only shows at login, when the code is exchanged for tokens
+
+Redirect URI: shown under Administration settings > OpenID Connect, added to the app registration in Entra (`Manual_Setup.md`).
+
+Login only with an app role, see ADR 0013. Run after the role is assigned in Entra, otherwise `simeon@` is locked out too:
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ user_oidc:provider Entra \
+  --group-provisioning=1 \
+  --mapping-groups=roles \
+  --group-whitelist-regex='/^nc-/' \
+  --group-restrict-login-to-whitelist=1
+sudo -u www-data php occ group:list                  # nc-user with the object ID as member
+```
+
+Send the login page straight to Entra, the local admin stays reachable via `/login?direct=1`:
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ config:app:set --type=string --value=0 user_oidc allow_multiple_user_backends
+```
+
+### user_oidc tests
+
+| Test | Expected |
+|------|----------|
+| `simeon@` in a private window | logged in, `occ user:list` shows the object ID |
+| `test-unassigned@` | denied by Entra (AADSTS50105), no user created |
+| Global Admin | passes Entra, Nextcloud denies the login ("Zugriff verboten"), no user created |
+| `/login` | redirects to Entra |
+| `/login?direct=1` | local login form, local admin works |
+
+- Entra signs in silently with whatever Microsoft account is active in the browser; with the Entra admin center open in the same browser that's the Global Admin and Nextcloud shows "Zugriff verboten" right away, use a private window or a separate browser profile
+
+Desktop client login (Login Flow v2) and WebDAV with the issued app password, from the PC. `-k` because the test certificate is self-signed (Schannel reports an untrusted root):
+
+```powershell
+$r = curl.exe -sk -X POST "https://cloud.homelab.test/index.php/login/v2" | ConvertFrom-Json
+$r.login   # open in the browser, log in via Entra, grant access
+$c = curl.exe -sk -X POST "$($r.poll.endpoint)" -d "token=$($r.poll.token)" | ConvertFrom-Json
+$c.loginName   # object ID
+curl.exe -sk -o NUL -w "%{http_code}`n" -u "$($c.loginName):$($c.appPassword)" -X PROPFIND -H "Depth: 1" "https://cloud.homelab.test/remote.php/dav/files/$($c.loginName)/"   # 207
+curl.exe -sk -o NUL -w "%{http_code}`n" -u "$($c.loginName):falsch" -X PROPFIND -H "Depth: 1" "https://cloud.homelab.test/remote.php/dav/files/$($c.loginName)/"   # 401
+```
+
+Revoke the app password as admin, without logging in as the user:
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ user:auth-tokens:list <OBJECT_ID>          # app passwords are "permanent", browser sessions "temporary"
+sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
+```
+
+- the first PROPFIND with the same app password returns 401 afterwards
+- clean up in PowerShell: `Remove-Variable c, r`
+- app passwords don't depend on Entra: removing a user or role in Entra doesn't stop an already configured client, revoke its tokens here
+- non-admins find their own sessions under `/settings/user/security`
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
@@ -422,5 +510,7 @@ After the reboot: `redis-cli ... ping`, `occ setupchecks`, no new errors in the 
 - [ ] phase 5: write up the install steps (PHP, MariaDB, Nextcloud, certificate, nginx site)
 - [ ] phase 6: local admin `ncadmin`: enforce 2FA or keep it off the internet once user_oidc works
 - [ ] phase 5: certificate on the Pi, TLS-ALPN-01 works through the passthrough without opening port 80
-- [ ] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, or disable auto provisioning)
+- [x] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, ADR 0013)
 - [ ] reminder before the client secret expires
+- [ ] go-live: test the real desktop and mobile clients (the phone can't resolve `cloud.homelab.test`, the PC already syncs with the production Pi)
+- [ ] after buying the domain: add it as custom domain in Entra, move the users' UPNs to it, own cloud-only admin account instead of the private one

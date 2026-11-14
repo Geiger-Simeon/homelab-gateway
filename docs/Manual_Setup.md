@@ -131,6 +131,30 @@ Listener on the Pi-VM, restart it before each test: `sudo nc -l 443 | head -n 1`
 - the PC IP in the PROXY line shows the Pi gets the real client, not `10.99.0.1`
 - reboot vps: nginx comes back on its own, positive test works again
 
+## Phase 5: Nextcloud login via Entra
+
+Commands (`user_oidc` install, provider, group settings) in `NOTES.md`. Order matters: provider first, then the Entra steps below, then the group restriction.
+
+1. redirect URI: copy it from Nextcloud (Administration settings > OpenID Connect), then in Entra: App registrations > nextcloud > Authentication > Add a platform > Web, paste it; leave access tokens and ID tokens (implicit/hybrid) unchecked, no front-channel logout URL
+2. app role: App registrations > nextcloud > App roles > Create app role
+    - display name `Nextcloud User`, allowed member types Users/Groups, value `nc-user`, enabled
+    - app roles instead of groups: assigning groups to an app needs Entra ID P1
+3. role assignment: Enterprise applications > nextcloud > Users and groups > edit `simeon@`, select `Nextcloud User` instead of "Default Access"; `test-unassigned@` stays unassigned
+
+### Verify
+
+Each login in a new private window, so no other Microsoft session gets picked up.
+
+| Who | Expected |
+|-----|----------|
+| `simeon@` | logged in; `occ user:list` shows the object ID, `occ group:list` shows it in `nc-user` |
+| `test-unassigned@` | Entra error page (AADSTS50105), no new user |
+| Global Admin | passes Entra, Nextcloud denies ("Zugriff verboten"), no new user |
+| anyone, `/login` | redirect to Entra without a Nextcloud login form |
+| local admin, `/login?direct=1` | local login form works |
+
+Desktop client login and WebDAV are tested without a client via `curl.exe`, see `NOTES.md`. The real desktop and mobile clients follow after go-live.
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
