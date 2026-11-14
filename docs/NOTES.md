@@ -501,16 +501,223 @@ sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
 - app passwords don't depend on Entra: removing a user or role in Entra doesn't stop an already configured client, revoke its tokens here
 - non-admins find their own sessions under `/settings/user/security`
 
+## Phase 6: Hardening
+
+### Design
+
+- vps: rate limits for new connections per source IP (nftables) and open connections per IP (nginx stream), see ADR 0014
+- no fail2ban on the Pi: it only sees `10.99.0.1` on the network level, a ban there would block the vps; Nextcloud throttles by the real IP from the PROXY header
+- SSH on both VMs: key only, no root, only `sgeiger`
+- unattended-upgrades on both VMs with a nightly reboot, see ADR 0016
+- Nextcloud: 2FA (TOTP) enforced only for the local admin, see ADR 0015; public links need a password and expire; no public upload
+- configs:
+    - `configs/<host>/etc/ssh/sshd_config.d/10-hardening.conf`
+    - `configs/<host>/etc/apt/apt.conf.d/20auto-upgrades`, `52unattended-upgrades-local`
+    - `configs/vps/etc/nftables.conf`, `configs/vps/etc/nginx/stream.d/gateway.conf`
+
+### SSH key (PC)
+
+Steps in `Manual_Setup.md`. Check before touching sshd, otherwise password login is gone without a working key:
+
+```powershell
+ssh -o PasswordAuthentication=no -o PreferredAuthentications=publickey sgeiger@192.168.178.38 "echo key-ok"
+ssh -o PasswordAuthentication=no -o PreferredAuthentications=publickey sgeiger@192.168.178.169 "echo key-ok"
+```
+
+### SSH (both VMs)
+
+```powershell
+scp configs/vps/etc/ssh/sshd_config.d/10-hardening.conf <USER>@<VPS_IP>:/tmp/
+scp configs/pi/etc/ssh/sshd_config.d/10-hardening.conf <USER>@<PI_IP>:/tmp/
+```
+
+Keep an open SSH session, it survives the reload. VMware console as fallback.
+
+```bash
+sudo install -m 0644 -o root -g root /tmp/10-hardening.conf /etc/ssh/sshd_config.d/10-hardening.conf
+ls /etc/ssh/sshd_config.d/            # nothing may sort before 10-, sshd takes the first value it reads
+sudo sshd -t && sudo systemctl reload ssh
+sudo sshd -T | grep -Ei '^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication|allowusers|maxauthtries|logingracetime|x11forwarding) '
+sudo etckeeper commit "harden sshd"
+```
+
+- expected: `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `allowusers sgeiger`, `maxauthtries 3`, `logingracetime 30`, `x11forwarding no`
+- test with a new connection from the PC: `ssh -o PubkeyAuthentication=no sgeiger@<IP>` fails with `Permission denied (publickey)`, `ssh sgeiger@<IP> "echo ok"` prints `ok`
+
+### Rate limits (vps)
+
+```powershell
+scp configs/vps/etc/nftables.conf configs/vps/etc/nginx/stream.d/gateway.conf <USER>@<VPS_IP>:/tmp/
+```
+
+```bash
+sudo install -m 0644 -o root -g root /tmp/nftables.conf /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf
+sudo nft -f /etc/nftables.conf
+sudo nft list table inet gateway
+sudo install -m 0644 -o root -g root /tmp/gateway.conf /etc/nginx/stream.d/gateway.conf
+sudo nginx -t && sudo systemctl reload nginx
+sudo etckeeper commit "rate limits for ssh and https"
+```
+
+| Where | Limit |
+|-------|-------|
+| nftables, 22/tcp | 5 new connections per minute and IP, burst 10 |
+| nftables, 443/tcp | 20 new connections per second and IP, burst 50 |
+| nginx stream | 30 open connections per IP (`limit_conn`), `preread_timeout 5s` instead of 30 s |
+
+- dynamic sets per address family (`ssh_rate4/6`, `https_rate4/6`), entries expire after a minute without new connections
+- only the SYN of a new connection is dropped, the client retransmits it after about a second; normal users see a delay at most, scanners and floods get slowed down
+- the drop rules have a `counter`, useful for monitoring later: `sudo nft list chain inet gateway input | grep counter`
+- no protection against brute force: any number of requests fit through one keep-alive connection, that's Nextcloud's job
+
+### Rate limit tests
+
+HTTPS, from the Pi-VM through the LAN to the vps. 100 separate curl processes are too slow to hit the limit (about 30 connections/s), one curl with parallel HTTP/1.1 connections does:
+
+```bash
+time (for i in $(seq 1 100); do curl -sk -o /dev/null -w "%{http_code}\n" --max-time 3 --resolve cloud.homelab.test:443:192.168.178.38 https://cloud.homelab.test/status.php & done | sort | uniq -c; wait)
+time curl -sk --http1.1 --parallel --parallel-immediate --parallel-max 200 --max-time 5 -w "%{http_code}\n" --resolve cloud.homelab.test:443:192.168.178.38 $(for i in $(seq 1 200); do printf -- '-o /dev/null https://cloud.homelab.test/status.php?%d ' $i; done) | sort | uniq -c
+```
+
+On the vps afterwards:
+
+```bash
+sudo nft list chain inet gateway input | grep 'dport 443'
+sudo grep -c 'limiting connections' /var/log/nginx/error.log
+```
+
+SSH, from the PC (`Test-NetConnection` is too slow, it pings and resolves first, the burst refills in between):
+
+```powershell
+1..20 | ForEach-Object { $c = New-Object Net.Sockets.TcpClient; $ok = $c.ConnectAsync("192.168.178.38", 22).Wait(1000); $c.Close(); "$_ $ok" }
+```
+
+| Test | Result |
+|------|--------|
+| 100 single curl processes | 100x `200` in 3.4 s, counter 0 |
+| 200 parallel connections | 30x `200`, 170x `000`; counter `https_rate4` 541 packets (incl. retransmits), nginx 103x `limiting connections` |
+| 20 TCP connects to 22 | 1 to 10 `True`, from 11 `False` |
+| browser | Nextcloud works normally |
+
+- after the SSH test new connections to the vps (also `scp`) are blocked for about a minute, open sessions keep working
+
+### Automatic updates (both VMs)
+
+```powershell
+scp configs/vps/etc/apt/apt.conf.d/20auto-upgrades configs/vps/etc/apt/apt.conf.d/52unattended-upgrades-local <USER>@<VPS_IP>:/tmp/
+scp configs/pi/etc/apt/apt.conf.d/20auto-upgrades configs/pi/etc/apt/apt.conf.d/52unattended-upgrades-local <USER>@<PI_IP>:/tmp/
+```
+
+Commit the sshd change before, apt commits pending `/etc` changes on its own.
+
+```bash
+sudo apt install unattended-upgrades
+sudo install -m 0644 -o root -g root /tmp/20auto-upgrades /etc/apt/apt.conf.d/20auto-upgrades
+sudo install -m 0644 -o root -g root /tmp/52unattended-upgrades-local /etc/apt/apt.conf.d/52unattended-upgrades-local
+apt-config dump | grep -E 'APT::Periodic::(Update-Package-Lists|Unattended-Upgrade)|Automatic-Reboot|Remove-Unused-Kernel'
+sudo unattended-upgrade --dry-run --debug 2>&1 | grep -i "allowed origins"
+systemctl list-timers 'apt-daily*'
+sudo etckeeper commit "enable unattended-upgrades"
+```
+
+- origins are the Debian default from `50unattended-upgrades`: `trixie` with label `Debian` (point releases) and `Debian-Security`, `trixie-security`; not only security updates
+- the local file only adds the reboot: vps 04:00, Pi-VM 04:30, so both aren't down at the same time; reboots only happen if an update needs one (`/var/run/reboot-required`)
+- timers `apt-daily.timer` and `apt-daily-upgrade.timer` active
+- Nextcloud isn't installed through apt, unattended-upgrades doesn't update it (see below)
+
+### Nextcloud: 2FA for the local admin
+
+TOTP setup in the browser, see `Manual_Setup.md`. Then enforce it only for a dedicated group (ADR 0015):
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ group:add local-2fa
+sudo -u www-data php occ group:adduser local-2fa ncadmin
+sudo -u www-data php occ twofactorauth:enforce --on --group=local-2fa
+sudo -u www-data php occ twofactorauth:enforce
+sudo -u www-data php occ twofactorauth:state ncadmin
+```
+
+- apps `twofactor_totp` and `twofactor_backupcodes` ship enabled
+- `ncadmin` via `/login?direct=1`: password, then TOTP code; `simeon@` via Entra: no TOTP
+- lockout: `sudo -u www-data php occ twofactorauth:disable ncadmin totp`
+
+### Nextcloud: public links
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ config:app:set core shareapi_enforce_links_password --value=yes
+sudo -u www-data php occ config:app:set core shareapi_default_expire_date --value=yes
+sudo -u www-data php occ config:app:set core shareapi_expire_after_n_days --value=7
+sudo -u www-data php occ config:app:set core shareapi_enforce_expire_date --value=yes
+sudo -u www-data php occ config:app:set core shareapi_allow_public_upload --value=no
+sudo -u www-data php occ config:list core | grep -i shareapi
+```
+
+- check in Administration settings > Sharing; a new link can't be created without a password, the expiry date is preset to 7 days and can't be removed, no upload option
+
+### Nextcloud: brute force protection
+
+`auth.bruteforce.protection.enabled` and `ratelimit.protection.enabled` aren't set in `config.php`, the defaults (on) apply. Check: three wrong passwords for `ncadmin` via `/login?direct=1` from the PC, then:
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ security:bruteforce:attempts 192.168.178.197
+sudo -u www-data php occ security:bruteforce:attempts 10.99.0.1
+sudo -u www-data php occ security:bruteforce:reset 192.168.178.197
+```
+
+- PC IP: attempts > 0 with a delay; `10.99.0.1`: 0 attempts, so the throttling works per client and not for the whole tunnel
+
+### Nextcloud: updates
+
+```bash
+sudo -u www-data php /var/www/nextcloud/occ update:check
+```
+
+- 2026-11-14: `Nextcloud 35.0.3 is available`, running 35.0.2, not installed yet
+- update path (not run yet): snapshot / backup first, then the built-in updater (`sudo -u www-data php /var/www/nextcloud/updater/updater.phar`), afterwards `occ upgrade` if the updater doesn't run it, `occ status` and setup checks
+- app `updatenotification` is enabled, the admin sees available updates in the web UI; notifications outside Nextcloud come with monitoring
+
+### Revoking access
+
+| Step | Result |
+|------|--------|
+| app password of `simeon@` revoked in the UI (Security > Devices & sessions) | WebDAV with it: 207 before, 401 after |
+| `test-unassigned@` temporarily assigned (`nc-user`), logged in, app password created | WebDAV 207 |
+| assignment removed in Entra | new login: AADSTS50105; WebDAV with the existing app password still 207 |
+| `occ user:disable <OBJECT_ID>` | WebDAV 401 |
+| cleanup: `occ user:delete <OBJECT_ID>`, `test-unassigned@` stays unassigned in Entra | |
+
+Taking someone's access away completely:
+
+1. remove the assignment / role in Entra (no new logins)
+2. disable the user in Nextcloud, or delete their app passwords if the account should stay:
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ user:disable <OBJECT_ID>
+sudo -u www-data php occ user:auth-tokens:list <OBJECT_ID>
+sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
+```
+
+### Snapshots
+
+- `hardening-ok` (both VMs)
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
 - [x] phase 5: if Nextcloud runs in Docker, revisit the Pi firewall (not needed, Nextcloud runs natively)
-- [ ] phase 6: harden SSH on the real VPS (open to the internet there)
+- [ ] go-live: apply the SSH hardening and rate limits on the real VPS before it is reachable (configs ready, phase 6)
 - [x] phase 5: reverse proxy on the Pi has to expect the PROXY header (`listen 443 ssl proxy_protocol`) and take the real IP only from `10.99.0.1`
 - [ ] phase 5: write up the install steps (PHP, MariaDB, Nextcloud, certificate, nginx site)
-- [ ] phase 6: local admin `ncadmin`: enforce 2FA or keep it off the internet once user_oidc works
+- [x] phase 6: local admin `ncadmin`: TOTP enforced (group `local-2fa`, ADR 0015)
 - [ ] phase 5: certificate on the Pi, TLS-ALPN-01 works through the passthrough without opening port 80
 - [x] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, ADR 0013)
-- [ ] reminder before the client secret expires
+- [x] reminder before the client secret expires (calendar, 4 weeks ahead)
 - [ ] go-live: test the real desktop and mobile clients (the phone can't resolve `cloud.homelab.test`, the PC already syncs with the production Pi)
 - [ ] after buying the domain: add it as custom domain in Entra, move the users' UPNs to it, own cloud-only admin account instead of the private one
+- [ ] update Nextcloud to 35.0.3 along the documented update path
+- [ ] monitoring: Nextcloud update notification, client secret expiry, rate limit counters
