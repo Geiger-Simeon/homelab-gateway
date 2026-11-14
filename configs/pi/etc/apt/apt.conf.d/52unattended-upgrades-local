@@ -1,0 +1,7 @@
+// /etc/apt/apt.conf.d/52unattended-upgrades-local on the pi
+// origins stay at the Debian default (security + stable point releases), this only adds the reboot
+// half an hour after the vps, so both don't go down at the same time
+
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
