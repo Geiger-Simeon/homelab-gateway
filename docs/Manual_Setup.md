@@ -1,7 +1,7 @@
 # Manual setup
 
 Steps that can't be scripted (or not reasonably), plus how to verify each phase.
-Shell commands live in `NOTES.md` and later in `setup.sh`.
+Shell commands live in `NOTES.md` and in `scripts/`.
 
 ## Test environment (VMware)
 
@@ -192,6 +192,45 @@ Configs and commands in `NOTES.md`. Manual parts:
 | Pi-VM | `occ security:bruteforce:attempts <PC IP>` after 3 wrong passwords | attempts > 0, delay > 0; `10.99.0.1` stays at 0 |
 | PC | WebDAV with a revoked app password | 401 |
 | browser | Nextcloud with `simeon@` | works normally, no delay |
+
+## Phase 7: Setup scripts
+
+`scripts/deploy.ps1` runs the whole setup from the PC: it installs the SSH key, copies the files, runs `setup-vps.sh`, `setup-pi.sh` and `setup-vps.sh` again, and passes the WireGuard public keys between the hosts.
+
+Before the first run:
+
+- Entra is set up (phase 1), the app role is assigned to the users (phase 5); the scripts don't touch Entra
+- both hosts: Debian 13 with "SSH server", user `ADMIN_USER` with sudo (root password left empty in the installer)
+- Pi: a second, empty disk for the data; `setup-pi.sh` finds it, asks once and formats it (only a disk without partitions and filesystem)
+- `.env` in the repo root, copied from `.env.example`, without passwords; only the upper part needs values
+- SSH key on the PC (phase 6)
+
+Run (PowerShell, repo root):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -VpsIp <VPS_IP> -PiIp <PI_IP>
+```
+
+Prompts, in this order:
+
+1. password of `ADMIN_USER` once per host, only while no key is installed
+2. sudo password for the first vps run
+3. sudo password for the Pi, `y` to format the data disk, new database password, new local admin password, Entra client secret (input is visible, pasting with a right click works in the PowerShell window)
+4. sudo password for the second vps run
+
+Afterwards by hand: the PC's hosts entry for the vps IP, TOTP for the local admin (`/login?direct=1`).
+
+The scripts also run on their own (`sudo bash ~/homelab-gateway/scripts/setup-*.sh`), then the keys and `VPS_ENDPOINT` come from `.env`.
+
+### Verify
+
+| Where | Check | Expected |
+|-------|-------|----------|
+| vps, end of the second run | output | `active` three times, a handshake timestamp other than `0`, `permitrootlogin no`, `passwordauthentication no`, `allowusers <ADMIN_USER>`, `maxauthtries 3` |
+| Pi, end of the run | output | `active` six times, `installed: true`, `maintenance: false`, JSON from `status.php` with `"installed":true` |
+| PC | run `deploy.ps1` again | no password for the hosts, no `updated ...` lines, no secret prompts, only sudo passwords |
+| PC | `curl.exe -sk https://<NC_DOMAIN>/status.php` (hosts entry on the vps IP) | JSON with `"installed":true` |
+| browser | login tests from phase 5 and 6 | same results as on the manually built VMs |
 
 ## Open
 

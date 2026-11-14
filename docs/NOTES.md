@@ -304,8 +304,87 @@ curl.exe -vk --max-time 5 --resolve other.test:443:192.168.178.38 https://other.
 
 ## Phase 5: Nextcloud (Pi-VM)
 
-- TODO: install steps (PHP, MariaDB, Nextcloud, certificate, nginx site), written up once user_oidc works
 - nginx site: `configs/pi/etc/nginx/sites-available/nextcloud.conf`
+
+### Install
+
+Done by `scripts/setup-pi.sh` now, kept here as the manual version.
+
+Packages (PHP 8.4 on Debian 13):
+
+```bash
+sudo apt update
+sudo apt install nginx php-fpm php-mysql php-gd php-curl php-mbstring php-xml php-zip php-intl php-gmp php-bcmath php-apcu php-redis php-imagick mariadb-server redis-server bzip2 gpg curl jq
+sudo rm /etc/nginx/sites-enabled/default
+sudo systemctl reload nginx
+```
+
+Database, password typed into a variable so it stays out of the history (a value pasted into `${...}` is read as a variable name and ends up empty):
+
+```bash
+read -rsp 'DB password: ' DBPASS; echo
+sudo mariadb <<SQL
+CREATE DATABASE nextcloud CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+CREATE USER 'nextcloud'@'localhost' IDENTIFIED BY '${DBPASS}';
+GRANT ALL PRIVILEGES ON nextcloud.* TO 'nextcloud'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+unset DBPASS
+sudo ss -tlnp | grep 3306   # only 127.0.0.1
+```
+
+Nextcloud from the tarball, checked against the checksum and the signature:
+
+```bash
+cd /tmp
+wget https://download.nextcloud.com/server/releases/latest.tar.bz2
+wget https://download.nextcloud.com/server/releases/latest.tar.bz2.sha256
+wget https://download.nextcloud.com/server/releases/latest.tar.bz2.asc
+wget https://nextcloud.com/nextcloud.asc
+sha256sum -c --ignore-missing latest.tar.bz2.sha256
+gpg --import nextcloud.asc
+gpg --verify latest.tar.bz2.asc latest.tar.bz2   # "Good signature"
+sudo tar -xjf latest.tar.bz2 -C /var/www/
+sudo chown -R www-data:www-data /var/www/nextcloud
+sudo install -d -m 0750 -o www-data -g www-data /mnt/data/nextcloud-data
+```
+
+Install, `occ` asks for the database and admin password:
+
+```bash
+cd /var/www/nextcloud
+sudo -u www-data php occ maintenance:install --database mysql --database-name nextcloud --database-user nextcloud --admin-user ncadmin --data-dir /mnt/data/nextcloud-data
+sudo -u www-data php occ config:system:set trusted_domains 0 --value=cloud.homelab.test
+sudo -u www-data php occ config:system:set overwrite.cli.url --value=https://cloud.homelab.test
+sudo -u www-data php occ status
+```
+
+- `sudo mariadb` works through unix socket auth as root, `mariadb -u nextcloud -p nextcloud -e 'SELECT 1;'` checks the password
+
+Self-signed test certificate (replaced at go-live):
+
+```bash
+sudo install -d -m 0755 /etc/ssl/nginx
+sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 -subj "/CN=cloud.homelab.test" -addext "subjectAltName=DNS:cloud.homelab.test" -keyout /etc/ssl/nginx/cloud.homelab.test.key -out /etc/ssl/nginx/cloud.homelab.test.crt
+sudo chmod 600 /etc/ssl/nginx/cloud.homelab.test.key
+```
+
+nginx site:
+
+```powershell
+scp configs/pi/etc/nginx/sites-available/nextcloud.conf <USER>@<PI_IP>:/tmp/nextcloud.conf
+```
+
+```bash
+sudo install -m 0644 -o root -g root /tmp/nextcloud.conf /etc/nginx/sites-available/nextcloud.conf
+sudo ln -s /etc/nginx/sites-available/nextcloud.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+systemctl is-active nginx php8.4-fpm mariadb redis-server
+sudo etckeeper commit "add nextcloud with nginx site"
+```
+
+- the cert key lands in `/etc/.git` too, like the WireGuard key; `/etc/.git` is never pushed
 
 ### Setup checks
 
@@ -427,7 +506,7 @@ Provider `Entra`. The client secret goes in through an environment variable, so 
 
 ```bash
 cd /var/www/nextcloud
-read -rsp "Client secret: " NC_OIDC_SECRET; echo
+read -rp "Client secret: " NC_OIDC_SECRET
 export NC_OIDC_SECRET
 sudo --preserve-env=NC_OIDC_SECRET -u www-data php occ user_oidc:provider Entra \
   --clientid="<CLIENT_ID>" \
@@ -441,7 +520,8 @@ sudo -u www-data php occ user_oidc:provider          # lists configured provider
 
 - `--unique-uid=0 --mapping-uid=oid`: the Nextcloud user ID is the Entra object ID, see ADR 0012; decide before the first login, changing it later creates a new user
 - the identifier `Entra` is part of the backchannel logout URL, keep it; deleting the provider invalidates its accounts
-- running the command again with the same identifier updates the provider, e.g. after a wrong secret
+- running the command again with the same identifier updates the provider, e.g. after a wrong secret; `--clientsecret-env` alone doesn't update anything, pass at least one more option (e.g. `--clientid`)
+- on the fresh test VMs (newer `user_oidc`) the secret was empty after the setup script (AADSTS7000218, no secret sent), probably cleared by a second provider call with only the group options; the script now creates the provider in one call
 - a wrong secret only shows at login, when the code is exchanged for tokens
 
 Redirect URI: shown under Administration settings > OpenID Connect, added to the app registration in Entra (`Manual_Setup.md`).
@@ -706,13 +786,43 @@ sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
 
 - `hardening-ok` (both VMs)
 
+## Phase 7: Setup scripts
+
+- `scripts/setup-vps.sh`, `scripts/setup-pi.sh`, shared helpers in `scripts/lib.sh`, `scripts/deploy.ps1` runs both from the PC; how to run them in `Manual_Setup.md`
+- `deploy.ps1` passes the WireGuard public keys between the hosts (the scripts copy them to `~/homelab-gateway/wg-gw.pub`, `/etc/wireguard` is root only), values from the environment win over `.env`
+- Pi: the data disk is formatted and mounted by the script, only if it is the single empty disk besides the system disk (or `DATA_DISK`), after a prompt
+- they do what phases 2 to 6 describe; the commands above stay as the manual version and explanation
+- idempotent: files are only replaced when they differ, services only reloaded then; keys, database, Nextcloud install and OIDC provider are only created when missing
+- settings without secrets in `.env` (git-ignored, template `.env.example`); passwords and the client secret are asked for on the terminal and only when needed
+- test values in the configs (`cloud.homelab.test`, `sgeiger`, the LAN) are replaced from `.env` while copying
+- not scripted: Entra, TOTP enrollment, the real certificate, the hosts entry on the PC
+- not for a Pi that already runs Nextcloud, data migration is a separate step
+- secrets are read with visible input (`read -rp`): pasting blind into `read -s` over `ssh -t` from PowerShell went wrong several times; the value stays in the terminal scrollback, not in the history
+
+### Tests (2026-11-14)
+
+Two fresh VMs `vps-test` and `pi-test` (Debian 13; `pi-test` got a desktop by accident, SSH added and booting to `multi-user.target`), old VMs left as they are, hosts entry on the PC pointed to `vps-test`.
+
+| Test | Result |
+|------|--------|
+| `deploy.ps1` on both fresh VMs | data disk found and formatted after the prompt, tunnel up, Nextcloud installed, `status.php` over the vps works |
+| `ncadmin` via `/login?direct=1` | works, TOTP enforced (`Two-factor challenge failed` in the log for wrong codes) |
+| `simeon@` after the first run | Entra login, then AADSTS7000218 from Nextcloud: the provider had no client secret |
+| provider and user deleted, `deploy.ps1` again with the fixed script | only the sudo passwords and the client secret asked, `Client secret loaded from environment variable`, `simeon@` logs in |
+
+Found while testing:
+
+- `deploy.ps1` had a helper function `Ssh`; PowerShell function names ignore case, so it shadowed `ssh` and called itself; renamed to `Remote`, all calls use `ssh.exe` / `scp.exe`
+- the client secret was empty after the first run, see `user_oidc` above; the provider is now created in one call
+- `user_oidc:provider` with only `--clientsecret-env` changes nothing, see `user_oidc` above
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
 - [x] phase 5: if Nextcloud runs in Docker, revisit the Pi firewall (not needed, Nextcloud runs natively)
 - [ ] go-live: apply the SSH hardening and rate limits on the real VPS before it is reachable (configs ready, phase 6)
 - [x] phase 5: reverse proxy on the Pi has to expect the PROXY header (`listen 443 ssl proxy_protocol`) and take the real IP only from `10.99.0.1`
-- [ ] phase 5: write up the install steps (PHP, MariaDB, Nextcloud, certificate, nginx site)
+- [x] phase 5: write up the install steps (PHP, MariaDB, Nextcloud, certificate, nginx site)
 - [x] phase 6: local admin `ncadmin`: TOTP enforced (group `local-2fa`, ADR 0015)
 - [ ] phase 5: certificate on the Pi, TLS-ALPN-01 works through the passthrough without opening port 80
 - [x] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, ADR 0013)

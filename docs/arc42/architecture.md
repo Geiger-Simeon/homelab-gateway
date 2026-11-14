@@ -4,7 +4,8 @@ Structure based on the [arc42](https://arc42.org) template (version 9.1-EN) by D
 
 Related documents:
 
-- [`docs/NOTES.md`](../NOTES.md): shell commands, source for `setup.sh`
+- [`docs/NOTES.md`](../NOTES.md): shell commands, source for the setup scripts
+- [`scripts/`](../../scripts/): `setup-vps.sh`, `setup-pi.sh`
 - [`docs/Manual_Setup.md`](../Manual_Setup.md): steps that can't be scripted, verification
 - [`docs/adr/`](../adr/): architecture decision records
 
@@ -86,7 +87,7 @@ flowchart LR
 | Confidentiality         | TLS passthrough on the VPS, TLS terminates on the Pi                                       |
 | Isolation               | tunnel only allows the peer `/32`, no IP forwarding, nftables on both hosts: the Pi accepts only the proxy port from the VPS, the VPS accepts nothing new from the tunnel |
 | Access control          | OIDC login via Entra ID handled by Nextcloud (`user_oidc`), assignment required, MFA       |
-| Reproducibility         | manual exploration in VMs, commands logged in `NOTES.md`, later `setup.sh`                 |
+| Reproducibility         | manual exploration in VMs, commands logged in `NOTES.md`, then idempotent setup scripts per host |
 
 # 5. Building Block View
 
@@ -202,7 +203,8 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 
 - every step is tried in the VMs first, VMware snapshots before larger changes
 - shell history with timestamps, etckeeper for `/etc`
-- working commands go into `NOTES.md`, later into `setup.sh`, tested against the `clean` snapshot
+- working commands go into `NOTES.md`, then into `scripts/setup-vps.sh` and `scripts/setup-pi.sh`, tested on fresh VMs
+- the scripts are idempotent and only replace files that differ; settings come from a git-ignored `.env`, secrets are asked for on the terminal
 
 ## Updates and monitoring
 
