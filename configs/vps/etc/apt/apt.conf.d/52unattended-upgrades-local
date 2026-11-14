@@ -1,0 +1,6 @@
+// /etc/apt/apt.conf.d/52unattended-upgrades-local on the vps
+// origins stay at the Debian default (security + stable point releases), this only adds the reboot
+
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";

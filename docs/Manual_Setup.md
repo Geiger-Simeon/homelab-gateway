@@ -25,6 +25,7 @@ Shell commands live in `NOTES.md` and later in `setup.sh`.
 | `wireguard-ok` | tunnel working and tested                                     |
 | `firewall-ok`  | nftables active and tested (Pi-VM only, missed on the vps)    |
 | `passthrough-ok` | nginx stream on the vps tested (vps only)                   |
+| `hardening-ok` | SSH, rate limits, automatic updates, Nextcloud 2FA and share settings tested (both VMs) |
 
 ## Phase 1: Entra ID
 
@@ -155,7 +156,44 @@ Each login in a new private window, so no other Microsoft session gets picked up
 
 Desktop client login and WebDAV are tested without a client via `curl.exe`, see `NOTES.md`. The real desktop and mobile clients follow after go-live.
 
+## Phase 6: Hardening
+
+Configs and commands in `NOTES.md`. Manual parts:
+
+1. SSH key on the PC (PowerShell), before password login is turned off:
+    ```powershell
+    ssh-keygen -t ed25519 -C "sgeiger@desktop-ae9t35e"
+    Get-Service ssh-agent | Set-Service -StartupType Automatic
+    Start-Service ssh-agent
+    ssh-add $env:USERPROFILE\.ssh\id_ed25519
+    type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <USER>@<VPS_IP> "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+    type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <USER>@<PI_IP> "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+    ```
+    - passphrase in the password manager, entry named after the key (`SSH-Key desktop-ae9t35e (id_ed25519)`) with fingerprint (`ssh-keygen -lf $env:USERPROFILE\.ssh\id_ed25519.pub`) and the hosts it's on
+    - the agent keeps the key, the passphrase is only needed for `ssh-add`
+2. TOTP for `ncadmin`: private window, `/login?direct=1`, Personal settings > Security > enable TOTP, scan the QR code; generate backup codes on the same page and store them with the `ncadmin` entry in the password manager. Only then enforce 2FA (`NOTES.md`)
+3. sharing: Administration settings > Sharing shows password and expiry date enforced, public upload off
+4. client secret: App registrations > nextcloud > Certificates & secrets, expiry date into the password manager, calendar reminder 4 weeks before
+5. revoking access for a person: remove the assignment in Entra (Enterprise applications > nextcloud > Users and groups), then disable the user or delete the app passwords in Nextcloud (`NOTES.md`)
+
+### Verify
+
+| From | Check | Expected |
+|------|-------|----------|
+| PC | `ssh -o PubkeyAuthentication=no sgeiger@<IP>` (both VMs) | `Permission denied (publickey)` |
+| PC | `ssh sgeiger@<IP> "echo ok"` (both VMs) | `ok`, no password prompt |
+| PC | 20 fast TCP connects to 22 on the vps (`NOTES.md`) | 1 to 10 succeed, then dropped for about a minute |
+| Pi-VM | 200 parallel HTTPS connections to the vps (`NOTES.md`) | 30 succeed, nftables counter and `limiting connections` in the nginx log go up |
+| both | `sudo unattended-upgrade --dry-run --debug 2>&1 \| grep -i "allowed origins"` | Debian and Debian-Security origins |
+| both | `systemctl list-timers 'apt-daily*'` | both timers active |
+| browser | `ncadmin` via `/login?direct=1` | TOTP code asked after the password |
+| browser | `simeon@` via Entra | no TOTP in Nextcloud |
+| browser | create a share link as `simeon@` | password required, expiry date 7 days, no upload option |
+| Pi-VM | `occ security:bruteforce:attempts <PC IP>` after 3 wrong passwords | attempts > 0, delay > 0; `10.99.0.1` stays at 0 |
+| PC | WebDAV with a revoked app password | 401 |
+| browser | Nextcloud with `simeon@` | works normally, no delay |
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
-- [ ] reminder before the client secret expires
+- [x] reminder before the client secret expires (calendar, 4 weeks ahead)

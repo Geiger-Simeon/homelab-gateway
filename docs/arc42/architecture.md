@@ -95,8 +95,8 @@ flowchart LR
 | Building block     | Host | Responsibility                                                   | Status       |
 |--------------------|------|------------------------------------------------------------------|--------------|
 | WireGuard server   | VPS  | endpoint of the tunnel, listens on UDP 51820                     | done (VM)    |
-| Firewall           | VPS  | nftables, only SSH, 443 and WireGuard, nothing new from the tunnel | done (VM)  |
-| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames into the tunnel, adds the PROXY header | done (VM) |
+| Firewall           | VPS  | nftables, only SSH, 443 and WireGuard, nothing new from the tunnel, rate limits for new SSH and HTTPS connections per IP | done (VM)  |
+| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames into the tunnel, adds the PROXY header, limits open connections per IP | done (VM) |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
 | Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
 | Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud | done (VM), test certificate |
@@ -160,9 +160,10 @@ Inbound rules (nftables, table `inet gateway`, files in `configs/<host>/etc/nfta
 
 - forwarding is dropped on both hosts, in addition to `ip_forward = 0`
 - outgoing traffic is not filtered
-- production: SSH on the VPS is reachable from the internet (hardening in phase 6), the real Pi needs additional rules for its existing VPN
+- new connections are rate limited per source IP: 22/tcp 5/min (burst 10), 443/tcp 20/s (burst 50), see [ADR 0014](../adr/0014-rate-limit-connections-on-the-vps-instead-of-fail2ban-on-the-pi.md)
+- production: SSH on the VPS is reachable from the internet, key only (hardening configs from phase 6), the real Pi needs additional rules for its existing VPN
 
-TLS passthrough on the VPS: nginx `stream`, config in `configs/vps/etc/nginx/stream.d/gateway.conf`. Known hostnames go to `10.99.0.2:443` with a PROXY protocol header, everything else is closed on the VPS ([ADR 0010](../adr/0010-pass-the-client-ip-with-the-proxy-protocol.md), [ADR 0011](../adr/0011-forward-only-known-hostnames-on-the-vps.md)). The VPS doesn't serve HTTP, the nginx default site is removed.
+TLS passthrough on the VPS: nginx `stream`, config in `configs/vps/etc/nginx/stream.d/gateway.conf`. Known hostnames go to `10.99.0.2:443` with a PROXY protocol header, everything else is closed on the VPS ([ADR 0010](../adr/0010-pass-the-client-ip-with-the-proxy-protocol.md), [ADR 0011](../adr/0011-forward-only-known-hostnames-on-the-vps.md)). At most 30 open connections per client IP, the ClientHello has to arrive within 5 s. The VPS doesn't serve HTTP, the nginx default site is removed.
 
 The Pi also runs an existing WireGuard VPN for my own devices, kept separate from `wg-gw`.
 
@@ -174,6 +175,7 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 - client secret lives in the password manager, expiry date noted; it goes into `occ` through an environment variable (`--clientsecret-env`), never as a command line argument, because the shell history records every command
 - `configs/<host>/` mirrors the paths on each machine; configs without secrets (nftables) are committed as they are, WireGuard only as templates (`*.conf.example`), the real files are git-ignored
 - `/etc/.git` (etckeeper) contains private keys and is never pushed
+- SSH key on the PC with a passphrase, passphrase and fingerprint in the password manager; TOTP backup codes of the local admin there as well
 
 ## Authentication and authorization
 
@@ -181,8 +183,20 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 - authorization in two steps: Entra decides who gets a token, Nextcloud only accepts tokens with an `nc-` app role ([ADR 0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md))
 - app roles become Nextcloud groups at every OIDC login; data access inside Nextcloud is granted through shares to users or groups
 - the Nextcloud user ID is the Entra object ID ([ADR 0012](../adr/0012-map-the-nextcloud-user-id-to-the-entra-object-id.md))
-- the local admin is the break-glass account, only via `/login?direct=1`
-- clients get app passwords that live on independently of Entra, revoking access means revoking them in Nextcloud too
+- the local admin is the break-glass account, only via `/login?direct=1`, with TOTP enforced through the group `local-2fa` ([ADR 0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md))
+- clients get app passwords that live on independently of Entra, revoking access means revoking them in Nextcloud too (tested: removed Entra assignment, existing app password still 207, 401 after `occ user:disable`)
+
+## Hardening
+
+| Layer | Measure |
+|-------|---------|
+| VPS network | nftables rate limits for new connections per IP, nginx `limit_conn` and short preread timeout ([ADR 0014](../adr/0014-rate-limit-connections-on-the-vps-instead-of-fail2ban-on-the-pi.md)) |
+| SSH (both hosts) | key only, no root login, only `sgeiger`, `MaxAuthTries 3` |
+| Nextcloud login | brute force protection per real client IP (PROXY protocol), Entra MFA for users, TOTP for the local admin |
+| Nextcloud sharing | public links need a password and expire after 7 days, no public upload |
+| Packages | unattended-upgrades with nightly reboot ([ADR 0016](../adr/0016-install-updates-automatically-with-a-nightly-reboot.md)) |
+
+- no fail2ban on the Pi: it only sees the tunnel IP, a ban would hit the VPS
 
 ## Reproducibility
 
@@ -192,7 +206,9 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 
 ## Updates and monitoring
 
-- planned, not decided yet: automatic security updates, uptime monitoring outside the Pi, alerts on vulnerabilities
+- Debian packages: unattended-upgrades on both hosts, Debian default origins (security and point releases), reboot if needed at 04:00 (VPS) and 04:30 (Pi), [ADR 0016](../adr/0016-install-updates-automatically-with-a-nightly-reboot.md)
+- Nextcloud: not installed through apt, updated by hand with the built-in updater after a snapshot / backup; `occ update:check` and the update notification in the admin UI show new versions
+- planned: uptime monitoring outside the Pi, alerts on vulnerabilities and available Nextcloud updates, client secret expiry, rate limit counters
 
 # 9. Architecture Decisions
 
@@ -212,6 +228,9 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0011](../adr/0011-forward-only-known-hostnames-on-the-vps.md) | Only known hostnames (SNI) are forwarded | accepted |
 | [0012](../adr/0012-map-the-nextcloud-user-id-to-the-entra-object-id.md) | Nextcloud user ID = Entra object ID (`oid`) | accepted |
 | [0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md) | Nextcloud login only with an app role | accepted |
+| [0014](../adr/0014-rate-limit-connections-on-the-vps-instead-of-fail2ban-on-the-pi.md) | Rate limits on the VPS instead of fail2ban on the Pi | accepted |
+| [0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md) | 2FA enforced only for the local admin | accepted |
+| [0016](../adr/0016-install-updates-automatically-with-a-nightly-reboot.md) | Automatic updates with a nightly reboot | accepted |
 
 # 10. Quality Requirements
 
@@ -227,6 +246,10 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | Access control  | an unassigned Entra user tries to log in                                 | rejected by Entra (AADSTS50105)               |
 | Access control  | the Global Admin tries to log in                                         | passes Entra, rejected by Nextcloud (no app role) |
 | Access control  | an app password is revoked                                               | next WebDAV request gets 401                  |
+| Access control  | a user is disabled in Nextcloud after the Entra assignment was removed   | existing app passwords get 401                |
+| Access control  | the local admin password leaks                                           | login still needs the TOTP code               |
+| Access control  | someone tries SSH passwords on the VPS                                   | no password login, new connections limited to 5/min after a burst of 10 |
+| Availability    | a scanner opens many connections to 443                                  | from 50 new connections in a burst, SYNs are dropped; at most 30 open connections per IP |
 | Availability    | the VPS reboots                                                          | tunnel is back within ~25 s without manual work |
 
 # 11. Risks and Technical Debts
@@ -236,15 +259,18 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | pre-auth vulnerability in the reverse proxy or Nextcloud is reachable from the internet | updates, rate limits, brute force protection, monitoring |
 | compromised VPS requests its own certificate for the domain           | CAA record, certificate transparency monitoring                            |
 | Global Admins bypass "assignment required" in Entra                   | admin account only for management, 2-step verification; Nextcloud rejects users without an `nc-` app role ([ADR 0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md)) |
-| access removed in Entra, but existing app passwords keep working (groups only update at an OIDC login) | revoke app passwords with `occ user:auth-tokens:delete` when removing a user or role |
-| local admin login stays reachable via `/login?direct=1`              | strong password, brute force protection; 2FA or further restriction in phase 6 |
+| access removed in Entra, but existing app passwords keep working (groups only update at an OIDC login), confirmed in a test | remove the Entra assignment and `occ user:disable` the user, or revoke the app passwords with `occ user:auth-tokens:delete` |
+| local admin login stays reachable via `/login?direct=1`              | strong password, brute force protection, TOTP enforced ([ADR 0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md)) |
 | Azure for Students ends after studying; tenant without subscription isn't officially guaranteed | no Azure resources in the subscription; fallback Auth0, migration only affects the login layer |
-| client secret expires, login breaks                                   | expiry date noted, reminder                                                |
+| client secret expires, login breaks                                   | expiry date in the password manager, calendar reminder 4 weeks ahead; later monitoring |
+| Nextcloud isn't updated by unattended-upgrades                         | `occ update:check`, update notification in the admin UI, documented update path; later monitoring |
+| a nightly automatic reboot leaves a host down                          | snapshots in testing; uptime monitoring outside the Pi (open) |
+| several users behind one IP (CGNAT, office) share the rate limits     | limits far above browser and desktop client needs, counters show drops |
 | only one Global Admin, lockout if the account is lost                 | recovery code stored safely                                                |
-| public share links in Nextcloud work without login                    | disable if not needed                                                       |
+| public share links in Nextcloud work without login                    | password and expiry date (7 days) enforced, no public upload               |
 | VM IPs come from DHCP, a changed IP breaks the tunnel endpoint in testing | fixed leases in the router (open)                                      |
 | Docker on the Pi turns on forwarding and routes published ports through the forward chain, past the input rules | not relevant, Nextcloud runs natively without Docker (phase 5) |
-| SSH on the real VPS is reachable from the internet                    | key-only login and further hardening in phase 6                            |
+| SSH on the real VPS is reachable from the internet                    | key only, no root, `AllowUsers`, rate limit (configs ready, apply before go-live) |
 | whoever reaches port 443 on the Pi can fake the client IP in the PROXY header | firewall allows 443 only from `10.99.0.1`; reverse proxy trusts the header only from there |
 | SNI filter is no access control, the domain becomes public via certificate transparency | only meant to cut scanner noise, login and updates on the Pi remain the real protection |
 
