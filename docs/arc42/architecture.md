@@ -58,7 +58,7 @@ flowchart LR
 
 | Partner            | Interface                                                  |
 |--------------------|------------------------------------------------------------|
-| User               | web browser, later possibly Nextcloud desktop/mobile apps  |
+| User               | web browser; Nextcloud desktop/mobile apps via Login Flow v2 and app passwords |
 | Microsoft Entra ID | OpenID Connect identity provider                           |
 
 ## Technical Context
@@ -99,13 +99,13 @@ flowchart LR
 | TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames into the tunnel, adds the PROXY header | done (VM) |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
 | Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
-| Reverse proxy      | Pi   | reads the PROXY header, TLS termination, certificate, forwards to Nextcloud | planned |
-| Nextcloud          | Pi   | application, data on the separate data disk                      | exists on the real Pi, VM planned |
-| `user_oidc`        | Pi   | OIDC login against Entra ID                                      | planned      |
+| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud | done (VM), test certificate |
+| Nextcloud          | Pi   | application, data on the separate data disk                      | done (VM), exists on the real Pi |
+| `user_oidc`        | Pi   | OIDC login against Entra ID, maps app roles to groups, rejects users without an `nc-` role | done (VM) |
 
 # 6. Runtime View
 
-## Login (planned)
+## Login
 
 ```mermaid
 sequenceDiagram
@@ -130,6 +130,14 @@ Notable:
 - the VPS only sees encrypted TLS, never the code, tokens or content
 - the token exchange runs from the Pi directly to Entra, not through the VPS
 - Entra rejects unassigned users before a code is issued (AADSTS50105), Global Admins excepted (see section 11)
+- Nextcloud then rejects everyone without an `nc-` app role in the ID token, which covers the Global Admin ([ADR 0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md))
+- `/login` redirects straight to Entra, the local admin uses `/login?direct=1`
+
+## Desktop client and WebDAV
+
+- the client starts Login Flow v2, the user logs in through the browser as above, Nextcloud issues an app password to the client
+- the client then syncs over WebDAV with that app password, through the same path (VPS, tunnel, Pi), no VPN on the client
+- the app password doesn't depend on Entra; it's revoked in Nextcloud (user settings or `occ user:auth-tokens:delete`)
 
 # 7. Deployment View
 
@@ -163,9 +171,18 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 ## Secrets
 
 - private keys are generated on the machine that uses them and never leave it
-- client secret lives in the password manager, expiry date noted
+- client secret lives in the password manager, expiry date noted; it goes into `occ` through an environment variable (`--clientsecret-env`), never as a command line argument, because the shell history records every command
 - `configs/<host>/` mirrors the paths on each machine; configs without secrets (nftables) are committed as they are, WireGuard only as templates (`*.conf.example`), the real files are git-ignored
 - `/etc/.git` (etckeeper) contains private keys and is never pushed
+
+## Authentication and authorization
+
+- Entra ID is the only identity provider for regular users; "assignment required" plus MFA on the Entra side
+- authorization in two steps: Entra decides who gets a token, Nextcloud only accepts tokens with an `nc-` app role ([ADR 0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md))
+- app roles become Nextcloud groups at every OIDC login; data access inside Nextcloud is granted through shares to users or groups
+- the Nextcloud user ID is the Entra object ID ([ADR 0012](../adr/0012-map-the-nextcloud-user-id-to-the-entra-object-id.md))
+- the local admin is the break-glass account, only via `/login?direct=1`
+- clients get app passwords that live on independently of Entra, revoking access means revoking them in Nextcloud too
 
 ## Reproducibility
 
@@ -193,6 +210,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0009](../adr/0009-use-nftables-with-a-dedicated-table.md) | nftables with a dedicated table `inet gateway` | accepted |
 | [0010](../adr/0010-pass-the-client-ip-with-the-proxy-protocol.md) | Client IP to the Pi via PROXY protocol | accepted |
 | [0011](../adr/0011-forward-only-known-hostnames-on-the-vps.md) | Only known hostnames (SNI) are forwarded | accepted |
+| [0012](../adr/0012-map-the-nextcloud-user-id-to-the-entra-object-id.md) | Nextcloud user ID = Entra object ID (`oid`) | accepted |
+| [0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md) | Nextcloud login only with an app role | accepted |
 
 # 10. Quality Requirements
 
@@ -206,6 +225,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | Isolation       | a scanner connects to the VPS IP without or with an unknown hostname     | closed on the VPS, nothing reaches the Pi     |
 | Access control  | an attacker tries passwords against the login                            | brute force protection on the Pi throttles by the real client IP (PROXY protocol) |
 | Access control  | an unassigned Entra user tries to log in                                 | rejected by Entra (AADSTS50105)               |
+| Access control  | the Global Admin tries to log in                                         | passes Entra, rejected by Nextcloud (no app role) |
+| Access control  | an app password is revoked                                               | next WebDAV request gets 401                  |
 | Availability    | the VPS reboots                                                          | tunnel is back within ~25 s without manual work |
 
 # 11. Risks and Technical Debts
@@ -214,7 +235,9 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 |----------------------------------------------------------------------|-----------------------------------------------------------------------------|
 | pre-auth vulnerability in the reverse proxy or Nextcloud is reachable from the internet | updates, rate limits, brute force protection, monitoring |
 | compromised VPS requests its own certificate for the domain           | CAA record, certificate transparency monitoring                            |
-| Global Admins bypass "assignment required" in Entra                   | admin account only for management, 2-step verification; additional check in Nextcloud (phase 5, open) |
+| Global Admins bypass "assignment required" in Entra                   | admin account only for management, 2-step verification; Nextcloud rejects users without an `nc-` app role ([ADR 0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md)) |
+| access removed in Entra, but existing app passwords keep working (groups only update at an OIDC login) | revoke app passwords with `occ user:auth-tokens:delete` when removing a user or role |
+| local admin login stays reachable via `/login?direct=1`              | strong password, brute force protection; 2FA or further restriction in phase 6 |
 | Azure for Students ends after studying; tenant without subscription isn't officially guaranteed | no Azure resources in the subscription; fallback Auth0, migration only affects the login layer |
 | client secret expires, login breaks                                   | expiry date noted, reminder                                                |
 | only one Global Admin, lockout if the account is lost                 | recovery code stored safely                                                |
@@ -236,3 +259,6 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | ADR              | architecture decision record                                                       |
 | SNI              | server name indication, hostname sent unencrypted in the TLS ClientHello           |
 | PROXY protocol   | header in front of a forwarded TCP connection that carries the original client and server address |
+| App role         | role defined in an Entra app registration, assigned per user, sent in the `roles` claim |
+| Login Flow v2    | Nextcloud login for clients: the browser handles the login, the client receives an app password |
+| App password     | Nextcloud token for clients and WebDAV, independent of the identity provider       |
