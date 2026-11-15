@@ -35,7 +35,7 @@ Done in the Entra admin center (`entra.microsoft.com`).
 2. admin account: 2-step verification on the private Microsoft account
 3. security defaults: Entra ID > Overview > Properties > manage security defaults > enabled
 4. users (Entra ID > Users > New user > Create new user):
-    - `simeon@<TENANT>.onmicrosoft.com` for the Nextcloud login, no roles
+    - `<USER>@<TENANT>.onmicrosoft.com` for the Nextcloud login, no roles
     - `test-unassigned@<TENANT>.onmicrosoft.com` for negative tests, keep it
     - first sign in for both at `myaccount.microsoft.com` in a private window: new password, MFA
 5. app registration (Entra ID > App registrations > New registration):
@@ -44,7 +44,7 @@ Done in the Entra admin center (`entra.microsoft.com`).
     - API permissions: Microsoft Graph delegated `openid`, `profile`, `email` (plus default `User.Read`), grant admin consent
 6. enterprise application (Entra ID > Enterprise applications > nextcloud):
     - Properties: enabled for sign in yes, assignment required yes, visible to users no
-    - Users and groups: assign only `simeon@`
+    - Users and groups: assign only `<USER>@`
 
 Values (not secret, but placeholders here):
 
@@ -62,7 +62,7 @@ https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/authorize?client_id=<C
 
 - the page always fails (nothing runs on localhost), the result is in the address bar
 - `?code=...` = login ok, `?error=...` or a Microsoft error page = denied
-- expected: `simeon@` ok, `test-unassigned@` denied (AADSTS50105), Global Admin ok (bypass, see `docs/arc42/architecture.md` section 11)
+- expected: `<USER>@` ok, `test-unassigned@` denied (AADSTS50105), Global Admin ok (bypass, see `docs/arc42/architecture.md` section 11)
 - remove the `http://localhost` redirect URI afterwards
 
 ## Phase 2: WireGuard
@@ -140,7 +140,7 @@ Commands (`user_oidc` install, provider, group settings) in `NOTES.md`. Order ma
 2. app role: App registrations > nextcloud > App roles > Create app role
     - display name `Nextcloud User`, allowed member types Users/Groups, value `nc-user`, enabled
     - app roles instead of groups: assigning groups to an app needs Entra ID P1
-3. role assignment: Enterprise applications > nextcloud > Users and groups > edit `simeon@`, select `Nextcloud User` instead of "Default Access"; `test-unassigned@` stays unassigned
+3. role assignment: Enterprise applications > nextcloud > Users and groups > edit `<USER>@`, select `Nextcloud User` instead of "Default Access"; `test-unassigned@` stays unassigned
 
 ### Verify
 
@@ -148,7 +148,7 @@ Each login in a new private window, so no other Microsoft session gets picked up
 
 | Who | Expected |
 |-----|----------|
-| `simeon@` | logged in; `occ user:list` shows the object ID, `occ group:list` shows it in `nc-user` |
+| `<USER>@` | logged in; `occ user:list` shows the object ID, `occ group:list` shows it in `nc-user` |
 | `test-unassigned@` | Entra error page (AADSTS50105), no new user |
 | Global Admin | passes Entra, Nextcloud denies ("Zugriff verboten"), no new user |
 | anyone, `/login` | redirect to Entra without a Nextcloud login form |
@@ -162,14 +162,14 @@ Configs and commands in `NOTES.md`. Manual parts:
 
 1. SSH key on the PC (PowerShell), before password login is turned off:
     ```powershell
-    ssh-keygen -t ed25519 -C "sgeiger@desktop-ae9t35e"
+    ssh-keygen -t ed25519 -C "<ADMIN_USER>@<PC>"
     Get-Service ssh-agent | Set-Service -StartupType Automatic
     Start-Service ssh-agent
     ssh-add $env:USERPROFILE\.ssh\id_ed25519
     type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <USER>@<VPS_IP> "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
     type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <USER>@<PI_IP> "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
     ```
-    - passphrase in the password manager, entry named after the key (`SSH-Key desktop-ae9t35e (id_ed25519)`) with fingerprint (`ssh-keygen -lf $env:USERPROFILE\.ssh\id_ed25519.pub`) and the hosts it's on
+    - passphrase in the password manager, entry named after the key (`SSH-Key <PC> (id_ed25519)`) with fingerprint (`ssh-keygen -lf $env:USERPROFILE\.ssh\id_ed25519.pub`) and the hosts it's on
     - the agent keeps the key, the passphrase is only needed for `ssh-add`
 2. TOTP for `ncadmin`: private window, `/login?direct=1`, Personal settings > Security > enable TOTP, scan the QR code; generate backup codes on the same page and store them with the `ncadmin` entry in the password manager. Only then enforce 2FA (`NOTES.md`)
 3. sharing: Administration settings > Sharing shows password and expiry date enforced, public upload off
@@ -180,18 +180,18 @@ Configs and commands in `NOTES.md`. Manual parts:
 
 | From | Check | Expected |
 |------|-------|----------|
-| PC | `ssh -o PubkeyAuthentication=no sgeiger@<IP>` (both VMs) | `Permission denied (publickey)` |
-| PC | `ssh sgeiger@<IP> "echo ok"` (both VMs) | `ok`, no password prompt |
+| PC | `ssh -o PubkeyAuthentication=no <ADMIN_USER>@<IP>` (both VMs) | `Permission denied (publickey)` |
+| PC | `ssh <ADMIN_USER>@<IP> "echo ok"` (both VMs) | `ok`, no password prompt |
 | PC | 20 fast TCP connects to 22 on the vps (`NOTES.md`) | 1 to 10 succeed, then dropped for about a minute |
 | Pi-VM | 200 parallel HTTPS connections to the vps (`NOTES.md`) | 30 succeed, nftables counter and `limiting connections` in the nginx log go up |
 | both | `sudo unattended-upgrade --dry-run --debug 2>&1 \| grep -i "allowed origins"` | Debian and Debian-Security origins |
 | both | `systemctl list-timers 'apt-daily*'` | both timers active |
 | browser | `ncadmin` via `/login?direct=1` | TOTP code asked after the password |
-| browser | `simeon@` via Entra | no TOTP in Nextcloud |
-| browser | create a share link as `simeon@` | password required, expiry date 7 days, no upload option |
+| browser | `<USER>@` via Entra | no TOTP in Nextcloud |
+| browser | create a share link as `<USER>@` | password required, expiry date 7 days, no upload option |
 | Pi-VM | `occ security:bruteforce:attempts <PC IP>` after 3 wrong passwords | attempts > 0, delay > 0; `10.99.0.1` stays at 0 |
 | PC | WebDAV with a revoked app password | 401 |
-| browser | Nextcloud with `simeon@` | works normally, no delay |
+| browser | Nextcloud with `<USER>@` | works normally, no delay |
 
 ## Phase 7: Setup scripts
 
