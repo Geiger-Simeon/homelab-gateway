@@ -1,0 +1,67 @@
+server:
+  # only nginx on the same host may talk to the API, the auth headers are trusted blindly
+  address: 127.0.0.1
+  port: 8081
+
+spring:
+  application:
+    name: homelab-portal
+  main:
+    banner-mode: off
+
+portal:
+  admin-role: portal-admin
+  system-status-file: /var/lib/homelab-portal/system-status.json
+  # older than this and the admin panel shows the status as outdated
+  system-status-max-age: 15m
+  health-cache-ttl: 30s
+
+  auth:
+    # set by nginx from the oauth2-proxy auth_request response (auth_request_set + proxy_set_header)
+    name-header: X-Auth-Request-Preferred-Username
+    email-header: X-Auth-Request-Email
+    roles-header: X-Auth-Request-Groups
+    dev-user:
+      enabled: false
+
+  # key = service id, the order here is the order of the tiles
+  services:
+    nextcloud:
+      name: Nextcloud
+      description: Dateien, Kalender und Kontakte. Sync mit Desktop- und Handy-Client.
+      host: cloud.homelab.test
+      url: https://cloud.homelab.test
+      icon: cloud
+      color: blue
+      role: app-nextcloud
+      health-url: https://cloud.homelab.test/status.php
+
+    jellyfin:
+      name: Jellyfin
+      description: Filme und Serien vom Heimserver streamen.
+      host: media.homelab.test
+      url: https://media.homelab.test
+      icon: play
+      color: purple
+      role: app-jellyfin
+      planned: true
+
+    rezepte:
+      name: Rezeptbuch
+      description: Eigene Rezepte sammeln und durchsuchen.
+      host: rezepte.homelab.test
+      url: https://rezepte.homelab.test
+      icon: book
+      color: orange
+      role: app-rezepte
+      planned: true
+
+    kalorien:
+      name: Kalorienzähler
+      description: Mahlzeiten und Kalorien erfassen.
+      host: kalorien.homelab.test
+      url: https://kalorien.homelab.test
+      icon: flame
+      color: teal
+      role: app-kalorien
+      planned: true

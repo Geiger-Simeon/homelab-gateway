@@ -1,0 +1,25 @@
+# local development only: `--spring.profiles.active=dev`
+# fakes the oauth2-proxy headers, the app refuses to start with dev-user outside this profile
+
+portal:
+  system-status-file: dev/system-status.json
+  # the example file is old, keep it from showing up as outdated
+  system-status-max-age: 3650d
+
+  auth:
+    dev-user:
+      enabled: true
+      name: Max
+      email: max@homelab.test
+      roles:
+        - portal-admin
+        - app-nextcloud
+        - app-jellyfin
+        - app-rezepte
+        - app-kalorien
+
+  # only the differences to application.yml, the rest of each service is merged in
+  services:
+    nextcloud:
+      # no health check against the Pi from the laptop
+      status-override: ONLINE
