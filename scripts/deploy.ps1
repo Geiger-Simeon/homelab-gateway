@@ -5,12 +5,18 @@
 param(
     [Parameter(Mandatory = $true)][string]$VpsIp,
     [Parameter(Mandatory = $true)][string]$PiIp,
-    [string]$User = 'sgeiger',
+    # default: ADMIN_USER from .env
+    [string]$User = '',
     [string]$PubKeyFile = "$env:USERPROFILE\.ssh\id_ed25519.pub"
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
 if (-not (Test-Path '.env')) { throw '.env missing, copy .env.example and fill it in' }
+if (-not $User) {
+    $m = Select-String -Path '.env' -Pattern '^ADMIN_USER="(.+)"' | Select-Object -First 1
+    if (-not $m) { throw 'ADMIN_USER missing in .env' }
+    $User = $m.Matches[0].Groups[1].Value
+}
 if (-not (Test-Path $PubKeyFile)) { throw "$PubKeyFile missing, create a key with ssh-keygen first" }
 
 # accept-new: only for hosts we haven't seen yet, a changed key still fails

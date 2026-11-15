@@ -61,7 +61,7 @@ sudo apt install etckeeper
 - own tenant via Azure for Students (no credit card), signed up with the private Microsoft account, not the university account
 - private account = Global Administrator, only used to manage the tenant
 - security defaults enabled, 2-step verification on the private account
-- separate cloud-only user `simeon@<TENANT>.onmicrosoft.com` for the Nextcloud login, MFA via Authenticator
+- separate cloud-only user `<USER>@<TENANT>.onmicrosoft.com` for the Nextcloud login, MFA via Authenticator
 - test user `test-unassigned@<TENANT>.onmicrosoft.com` for negative tests, keep it
 
 ### App registration "nextcloud"
@@ -76,7 +76,7 @@ sudo apt install etckeeper
 - enabled for users to sign in: yes
 - assignment required: yes
 - visible to users: no
-- assigned users: only `simeon@`, with the app role `nc-user` since phase 5 (not "Default Access")
+- assigned users: only `<USER>@`, with the app role `nc-user` since phase 5 (not "Default Access")
 
 ### Values
 
@@ -94,7 +94,7 @@ https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/authorize?client_id=<C
 
 - result is in the address bar, the page itself always fails (nothing runs on localhost)
 - `?code=...` = login ok, `?error=...` or Microsoft error page = denied
-- results: `simeon@` ok, `test-unassigned@` denied, Global Admin ok
+- results: `<USER>@` ok, `test-unassigned@` denied, Global Admin ok
 - Global Admins bypass "assignment required" by design (documented by Microsoft), has to be handled on the Nextcloud side
 - remove `http://localhost` redirect URI afterwards
 
@@ -526,7 +526,7 @@ sudo -u www-data php occ user_oidc:provider          # lists configured provider
 
 Redirect URI: shown under Administration settings > OpenID Connect, added to the app registration in Entra (`Manual_Setup.md`).
 
-Login only with an app role, see ADR 0013. Run after the role is assigned in Entra, otherwise `simeon@` is locked out too:
+Login only with an app role, see ADR 0013. Run after the role is assigned in Entra, otherwise `<USER>@` is locked out too:
 
 ```bash
 cd /var/www/nextcloud
@@ -549,7 +549,7 @@ sudo -u www-data php occ config:app:set --type=string --value=0 user_oidc allow_
 
 | Test | Expected |
 |------|----------|
-| `simeon@` in a private window | logged in, `occ user:list` shows the object ID |
+| `<USER>@` in a private window | logged in, `occ user:list` shows the object ID |
 | `test-unassigned@` | denied by Entra (AADSTS50105), no user created |
 | Global Admin | passes Entra, Nextcloud denies the login ("Zugriff verboten"), no user created |
 | `/login` | redirects to Entra |
@@ -587,7 +587,7 @@ sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
 
 - vps: rate limits for new connections per source IP (nftables) and open connections per IP (nginx stream), see ADR 0014
 - no fail2ban on the Pi: it only sees `10.99.0.1` on the network level, a ban there would block the vps; Nextcloud throttles by the real IP from the PROXY header
-- SSH on both VMs: key only, no root, only `sgeiger`
+- SSH on both VMs: key only, no root, only the admin user from `ADMIN_USER`
 - unattended-upgrades on both VMs with a nightly reboot, see ADR 0016
 - Nextcloud: 2FA (TOTP) enforced only for the local admin, see ADR 0015; public links need a password and expire; no public upload
 - configs:
@@ -600,8 +600,8 @@ sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
 Steps in `Manual_Setup.md`. Check before touching sshd, otherwise password login is gone without a working key:
 
 ```powershell
-ssh -o PasswordAuthentication=no -o PreferredAuthentications=publickey sgeiger@192.168.178.38 "echo key-ok"
-ssh -o PasswordAuthentication=no -o PreferredAuthentications=publickey sgeiger@192.168.178.169 "echo key-ok"
+ssh -o PasswordAuthentication=no -o PreferredAuthentications=publickey <ADMIN_USER>@192.168.178.38 "echo key-ok"
+ssh -o PasswordAuthentication=no -o PreferredAuthentications=publickey <ADMIN_USER>@192.168.178.169 "echo key-ok"
 ```
 
 ### SSH (both VMs)
@@ -621,8 +621,8 @@ sudo sshd -T | grep -Ei '^(permitrootlogin|passwordauthentication|kbdinteractive
 sudo etckeeper commit "harden sshd"
 ```
 
-- expected: `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `allowusers sgeiger`, `maxauthtries 3`, `logingracetime 30`, `x11forwarding no`
-- test with a new connection from the PC: `ssh -o PubkeyAuthentication=no sgeiger@<IP>` fails with `Permission denied (publickey)`, `ssh sgeiger@<IP> "echo ok"` prints `ok`
+- expected: `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `allowusers <ADMIN_USER>`, `maxauthtries 3`, `logingracetime 30`, `x11forwarding no`
+- test with a new connection from the PC: `ssh -o PubkeyAuthentication=no <ADMIN_USER>@<IP>` fails with `Permission denied (publickey)`, `ssh <ADMIN_USER>@<IP> "echo ok"` prints `ok`
 
 ### Rate limits (vps)
 
@@ -720,7 +720,7 @@ sudo -u www-data php occ twofactorauth:state ncadmin
 ```
 
 - apps `twofactor_totp` and `twofactor_backupcodes` ship enabled
-- `ncadmin` via `/login?direct=1`: password, then TOTP code; `simeon@` via Entra: no TOTP
+- `ncadmin` via `/login?direct=1`: password, then TOTP code; `<USER>@` via Entra: no TOTP
 - lockout: `sudo -u www-data php occ twofactorauth:disable ncadmin totp`
 
 ### Nextcloud: public links
@@ -764,7 +764,7 @@ sudo -u www-data php /var/www/nextcloud/occ update:check
 
 | Step | Result |
 |------|--------|
-| app password of `simeon@` revoked in the UI (Security > Devices & sessions) | WebDAV with it: 207 before, 401 after |
+| app password of `<USER>@` revoked in the UI (Security > Devices & sessions) | WebDAV with it: 207 before, 401 after |
 | `test-unassigned@` temporarily assigned (`nc-user`), logged in, app password created | WebDAV 207 |
 | assignment removed in Entra | new login: AADSTS50105; WebDAV with the existing app password still 207 |
 | `occ user:disable <OBJECT_ID>` | WebDAV 401 |
@@ -794,7 +794,7 @@ sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
 - they do what phases 2 to 6 describe; the commands above stay as the manual version and explanation
 - idempotent: files are only replaced when they differ, services only reloaded then; keys, database, Nextcloud install and OIDC provider are only created when missing
 - settings without secrets in `.env` (git-ignored, template `.env.example`); passwords and the client secret are asked for on the terminal and only when needed
-- test values in the configs (`cloud.homelab.test`, `sgeiger`, the LAN) are replaced from `.env` while copying
+- test values in the configs (`cloud.homelab.test`, `admin`, the LAN) are replaced from `.env` while copying
 - not scripted: Entra, TOTP enrollment, the real certificate, the hosts entry on the PC
 - not for a Pi that already runs Nextcloud, data migration is a separate step
 - secrets are read with visible input (`read -rp`): pasting blind into `read -s` over `ssh -t` from PowerShell went wrong several times; the value stays in the terminal scrollback, not in the history
@@ -807,8 +807,8 @@ Two fresh VMs `vps-test` and `pi-test` (Debian 13; `pi-test` got a desktop by ac
 |------|--------|
 | `deploy.ps1` on both fresh VMs | data disk found and formatted after the prompt, tunnel up, Nextcloud installed, `status.php` over the vps works |
 | `ncadmin` via `/login?direct=1` | works, TOTP enforced (`Two-factor challenge failed` in the log for wrong codes) |
-| `simeon@` after the first run | Entra login, then AADSTS7000218 from Nextcloud: the provider had no client secret |
-| provider and user deleted, `deploy.ps1` again with the fixed script | only the sudo passwords and the client secret asked, `Client secret loaded from environment variable`, `simeon@` logs in |
+| `<USER>@` after the first run | Entra login, then AADSTS7000218 from Nextcloud: the provider had no client secret |
+| provider and user deleted, `deploy.ps1` again with the fixed script | only the sudo passwords and the client secret asked, `Client secret loaded from environment variable`, `<USER>@` logs in |
 
 Found while testing:
 

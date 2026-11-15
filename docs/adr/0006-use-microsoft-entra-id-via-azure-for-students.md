@@ -19,7 +19,7 @@ Azure for Students is verified with the university email and creates an own tena
 Own Entra ID tenant via Azure for Students:
 
 - app registration `nextcloud`, single tenant
-- assignment required, only `simeon@` assigned
+- assignment required, only `<USER>@` assigned
 - separate non-admin user for the login, the Global Admin only manages the tenant
 - security defaults enabled
 
