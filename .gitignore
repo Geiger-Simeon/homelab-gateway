@@ -4,6 +4,9 @@
 #Environment Variables
 .env
 
+#Claude Code local settings
+.claude/settings.local.json
+
 #real WireGuard configs contain private keys, only templates go in the repo
 configs/**/wireguard/*.conf
 *.key

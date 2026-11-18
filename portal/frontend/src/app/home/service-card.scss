@@ -1,0 +1,185 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+.card {
+  --mat-card-outlined-container-color: var(--mat-sys-surface-container-low);
+  --mat-card-outlined-container-shape: 16px;
+  position: relative;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: box-shadow 150ms;
+}
+
+.card.live:hover {
+  box-shadow: var(--mat-sys-level2);
+}
+
+.top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.icon {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+
+  .mat-icon {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+.svc-blue { background: var(--hl-blue-bg); color: var(--hl-blue-fg); }
+.svc-purple { background: var(--hl-purple-bg); color: var(--hl-purple-fg); }
+.svc-orange { background: var(--hl-orange-bg); color: var(--hl-orange-fg); }
+.svc-teal { background: var(--hl-teal-bg); color: var(--hl-teal-fg); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font: var(--mat-sys-label-large);
+  white-space: nowrap;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ok { background: var(--hl-ok-bg); color: var(--hl-ok-fg); }
+.down { background: var(--mat-sys-error-container); color: var(--mat-sys-on-error-container); }
+.planned { background: var(--mat-sys-surface-container-highest); color: var(--mat-sys-on-surface-variant); }
+.unknown { background: transparent; color: var(--mat-sys-on-surface-variant); border: 1px solid var(--mat-sys-outline-variant); }
+
+.text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  h3 {
+    margin: 0;
+    font: var(--mat-sys-title-medium);
+    font-size: 18px;
+  }
+}
+
+.host {
+  font-size: 13px;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.desc {
+  margin: 8px 0 0;
+  font: var(--mat-sys-body-medium);
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.open {
+  // material buttons are position: relative, the overlay has to anchor on the card
+  position: static;
+}
+
+.card:has(.open:focus-visible) {
+  outline: 2px solid var(--mat-sys-primary);
+  outline-offset: 2px;
+}
+
+.open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+// compact rows on phones, like the mobile mockup
+@media (max-width: 599px) {
+  .card {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    min-height: 68px;
+  }
+
+  .top {
+    display: contents;
+  }
+
+  .icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    order: 0;
+
+    .mat-icon {
+      width: 22px;
+      height: 22px;
+    }
+  }
+
+  .text {
+    order: 1;
+    min-width: 0;
+    gap: 2px;
+
+    h3 {
+      font-size: 16px;
+    }
+  }
+
+  .host {
+    display: none;
+  }
+
+  .desc {
+    margin: 0;
+    font: var(--mat-sys-body-small);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chip {
+    order: 2;
+    height: 24px;
+    padding: 0 10px;
+    font: var(--mat-sys-label-medium);
+  }
+
+  // keep the link for the stretched click area, hide the button look
+  .foot {
+    position: static;
+    order: 3;
+    width: 0;
+    margin-left: -14px;
+    overflow: hidden;
+  }
+
+  .foot button {
+    display: none;
+  }
+}

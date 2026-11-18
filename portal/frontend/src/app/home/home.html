@@ -1,0 +1,58 @@
+<main class="page">
+  <h1 class="greeting">Hallo {{ firstName() }}</h1>
+
+  @if (me().admin) {
+    @if (system(); as status) {
+      <hl-system-panel [status]="status" />
+    } @else if (systemFailed()) {
+      <p class="system-missing" role="status">
+        Systemstatus nicht verfügbar. Die Statusdatei fehlt oder ist ungültig, Details im Journal
+        des Portals.
+      </p>
+    }
+  }
+
+  <section class="services" aria-labelledby="services-heading">
+    <div class="services-head">
+      <h2 id="services-heading">Deine Dienste</h2>
+
+      @if (services(); as list) {
+        @if (list.length > 0) {
+          <mat-chip-listbox
+            aria-label="Dienste filtern"
+            [value]="filter()"
+            (change)="onFilter($event)"
+          >
+            <mat-chip-option value="all">Alle ({{ list.length }})</mat-chip-option>
+            <mat-chip-option value="online">Online ({{ onlineCount() }})</mat-chip-option>
+          </mat-chip-listbox>
+        }
+      }
+    </div>
+
+    @if (servicesFailed()) {
+      <div class="empty">
+        <p>Die Dienste konnten nicht geladen werden.</p>
+        <button mat-stroked-button type="button" (click)="loadServices()">Erneut versuchen</button>
+      </div>
+    } @else if (services(); as list) {
+      @if (list.length === 0) {
+        <div class="empty">
+          <div class="empty-icon"><mat-icon svgIcon="lock" /></div>
+          <h3>Noch keine Dienste freigegeben</h3>
+          <p>Bitte den Administrator, dir einen Dienst freizugeben.</p>
+        </div>
+      } @else if (shown().length === 0) {
+        <div class="empty">
+          <p>Gerade ist keiner deiner Dienste online.</p>
+        </div>
+      } @else {
+        <ul class="grid">
+          @for (service of shown(); track service.id) {
+            <li><hl-service-card [service]="service" /></li>
+          }
+        </ul>
+      }
+    }
+  </section>
+</main>

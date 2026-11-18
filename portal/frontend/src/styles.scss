@@ -1,0 +1,54 @@
+@use '@angular/material' as mat;
+
+html {
+  // light-dark() picks the scheme set on <html> by ThemeService
+  color-scheme: dark;
+
+  @include mat.theme((
+    color: (
+      primary: mat.$azure-palette,
+      theme-type: color-scheme,
+    ),
+    typography: Roboto,
+    density: 0,
+  ));
+
+  // service accents, kept close to the tonal containers of the material palettes
+  --hl-blue-bg: light-dark(#d7e3ff, #1e4f8f);
+  --hl-blue-fg: light-dark(#001b3f, #d7e3ff);
+  --hl-purple-bg: light-dark(#eaddff, #5b3f9e);
+  --hl-purple-fg: light-dark(#21005d, #eaddff);
+  --hl-orange-bg: light-dark(#ffdcc2, #8a4a12);
+  --hl-orange-fg: light-dark(#2e1500, #ffdcc2);
+  --hl-teal-bg: light-dark(#9cf1f0, #00676a);
+  --hl-teal-fg: light-dark(#002020, #b8fffe);
+
+  --hl-ok-bg: light-dark(#c4eed0, #0f3a1e);
+  --hl-ok-fg: light-dark(#0f5223, #8fe0a8);
+  --hl-warn-fg: light-dark(#7a4900, #ffb869);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--mat-sys-surface);
+  color: var(--mat-sys-on-surface);
+  font: var(--mat-sys-body-medium);
+}
+
+.hl-mono {
+  font-family: 'Roboto Mono', ui-monospace, monospace;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

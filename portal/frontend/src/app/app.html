@@ -1,0 +1,46 @@
+<mat-toolbar class="bar">
+  <div class="bar-inner">
+    <div class="brand">
+      <mat-icon svgIcon="logo" class="brand-icon" aria-hidden="true" />
+      <span class="brand-name">homelab</span>
+    </div>
+
+    <div class="actions">
+      <button
+        mat-icon-button
+        type="button"
+        (click)="themes.toggle()"
+        [attr.aria-label]="isDark() ? 'Helles Design' : 'Dunkles Design'"
+      >
+        <mat-icon [svgIcon]="isDark() ? 'light-mode' : 'dark-mode'" />
+      </button>
+
+      <!-- oauth2-proxy endpoint, see docs/NOTES.md for the Entra logout redirect -->
+      <a mat-button href="/oauth2/sign_out" class="logout">
+        <mat-icon svgIcon="logout" />
+        <span class="logout-label">Abmelden</span>
+      </a>
+
+      @if (me(); as user) {
+        <div class="avatar" role="img" [attr.aria-label]="'Angemeldet als ' + user.name">
+          {{ initial() }}
+        </div>
+      }
+    </div>
+  </div>
+</mat-toolbar>
+
+@if (!me() && !meFailed()) {
+  <mat-progress-bar mode="indeterminate" aria-label="Lädt" />
+}
+
+@if (me(); as user) {
+  <hl-home [me]="user" />
+}
+
+@if (meFailed()) {
+  <main class="failed">
+    <p>Das Portal ist gerade nicht erreichbar.</p>
+    <button mat-stroked-button type="button" (click)="reload()">Neu laden</button>
+  </main>
+}

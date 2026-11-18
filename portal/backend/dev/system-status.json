@@ -1,0 +1,9 @@
+{
+  "generatedAt": "2026-11-15T13:55:00Z",
+  "checks": [
+    { "id": "server", "label": "Gateway (VPS)", "value": "Online", "state": "OK" },
+    { "id": "tunnel", "label": "WireGuard-Tunnel", "value": "Verbunden", "state": "OK" },
+    { "id": "backup", "label": "Letztes Backup", "value": "vor 7 Std.", "state": "INFO" },
+    { "id": "updates", "label": "Updates", "value": "2 verfügbar", "state": "WARN" }
+  ]
+}
