@@ -30,28 +30,34 @@ public record PortalProperties(
             healthCacheTtl = Duration.ofSeconds(30);
         }
         if (auth == null) {
-            auth = new Auth(null, null, null, null);
+            auth = new Auth(null, null, null);
         }
         services = services == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(services));
     }
 
     /**
-     * Names of the headers nginx sets from the oauth2-proxy auth_request response.
+     * Entra tenant and client id of the app registration. The ID token's issuer and aud are checked
+     * against these. Required outside the dev profile.
      */
-    public record Auth(String nameHeader, String emailHeader, String rolesHeader, DevUser devUser) {
+    public record Auth(String tenantId, String clientId, DevUser devUser) {
 
         public Auth {
-            nameHeader = nameHeader == null ? "X-Auth-Request-Preferred-Username" : nameHeader;
-            emailHeader = emailHeader == null ? "X-Auth-Request-Email" : emailHeader;
-            rolesHeader = rolesHeader == null ? "X-Auth-Request-Groups" : rolesHeader;
-            devUser = devUser == null ? new DevUser(false, null, null, null) : devUser;
+            devUser = devUser == null ? new DevUser(null, null, null, List.of()) : devUser;
+        }
+
+        public String issuer() {
+            return "https://login.microsoftonline.com/" + tenantId + "/v2.0";
+        }
+
+        public String jwkSetUri() {
+            return "https://login.microsoftonline.com/" + tenantId + "/discovery/v2.0/keys";
         }
     }
 
     /**
-     * Fake user for local development without oauth2-proxy. Only allowed with the dev profile.
+     * Fake user for the dev profile. The profile alone turns it on, no extra flag.
      */
-    public record DevUser(boolean enabled, String name, String email, List<String> roles) {
+    public record DevUser(String name, String email, String preferredUsername, List<String> roles) {
 
         public DevUser {
             roles = roles == null ? List.of() : List.copyOf(roles);

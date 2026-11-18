@@ -1,5 +1,5 @@
 # local development only: `--spring.profiles.active=dev`
-# fakes the oauth2-proxy headers, the app refuses to start with dev-user outside this profile
+# the dev user replaces token validation, DevAuthConfig only exists in this profile
 
 portal:
   system-status-file: dev/system-status.json
@@ -8,9 +8,9 @@ portal:
 
   auth:
     dev-user:
-      enabled: true
-      name: Max
+      name: Max Mustermann
       email: max@homelab.test
+      preferred-username: max@homelab.test
       roles:
         - portal-admin
         - app-nextcloud

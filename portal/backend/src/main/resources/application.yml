@@ -1,5 +1,5 @@
 server:
-  # only nginx on the same host may talk to the API, the auth headers are trusted blindly
+  # only nginx on the same host may talk to the API, Bearer tokens are forwarded by nginx
   address: 127.0.0.1
   port: 8081
 
@@ -17,12 +17,9 @@ portal:
   health-cache-ttl: 30s
 
   auth:
-    # set by nginx from the oauth2-proxy auth_request response (auth_request_set + proxy_set_header)
-    name-header: X-Auth-Request-Preferred-Username
-    email-header: X-Auth-Request-Email
-    roles-header: X-Auth-Request-Groups
-    dev-user:
-      enabled: false
+    # Entra tenant and client id of the portal app registration
+    tenant-id: ${ENTRA_TENANT_ID:}
+    client-id: ${ENTRA_CLIENT_ID:}
 
   # key = service id, the order here is the order of the tiles
   services:
