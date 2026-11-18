@@ -104,7 +104,7 @@ flowchart LR
 | Nextcloud          | Pi   | application, data on the separate data disk                      | done (VM), exists on the real Pi |
 | `user_oidc`        | Pi   | OIDC login against Entra ID, maps app roles to groups, rejects users without an `nc-` role | done (VM) |
 | Portal frontend    | Pi   | Angular start page, tiles per app role, system overview for `portal-admin`, served by nginx as static files | code, not deployed |
-| Portal API         | Pi   | Spring Boot on `127.0.0.1:8081`, user and roles from the auth proxy headers, service status, system status file | code, not deployed |
+| Portal API         | Pi   | Spring Boot on `127.0.0.1:8081`, Spring Security resource server that validates the Entra ID token forwarded by oauth2-proxy, service status, system status file | code, not deployed |
 | Auth proxy         | Pi   | oauth2-proxy in front of the portal and own apps, login against Entra, roles per hostname | planned |
 
 # 6. Runtime View
@@ -236,7 +236,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0014](../adr/0014-rate-limit-connections-on-the-vps-instead-of-fail2ban-on-the-pi.md) | Rate limits on the VPS instead of fail2ban on the Pi | accepted |
 | [0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md) | 2FA enforced only for the local admin | accepted |
 | [0016](../adr/0016-install-updates-automatically-with-a-nightly-reboot.md) | Automatic updates with a nightly reboot | accepted |
-| [0017](../adr/0017-build-the-portal-with-angular-and-spring-boot.md) | Portal with Angular and Spring Boot | accepted |
+| [0017](../adr/0017-build-the-portal-with-angular-and-spring-boot.md) | Portal with Angular and Spring Boot | accepted, auth part amended by 0018 |
+| [0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md) | Validate the Entra ID token in the portal API | accepted |
 
 # 10. Quality Requirements
 
@@ -279,7 +280,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | SSH on the real VPS is reachable from the internet                    | key only, no root, `AllowUsers`, rate limit (configs ready, apply before go-live) |
 | whoever reaches port 443 on the Pi can fake the client IP in the PROXY header | firewall allows 443 only from `10.99.0.1`; reverse proxy trusts the header only from there |
 | SNI filter is no access control, the domain becomes public via certificate transparency | only meant to cut scanner noise, login and updates on the Pi remain the real protection |
-| portal API trusts user and role headers; reachable directly, anyone could claim `portal-admin` | API listens on `127.0.0.1` only, nginx overwrites the headers on every request ([ADR 0017](../adr/0017-build-the-portal-with-angular-and-spring-boot.md)) |
+| portal API, reachable directly on the Pi, could be called by another process without the auth proxy | API validates the Entra ID token forwarded by oauth2-proxy (issuer, `aud`, signature) in Spring Security, loopback bind stays as a second layer ([ADR 0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md)) |
+| Entra ID tokens expire after about one hour, the portal API would start returning 401 | oauth2-proxy `cookie_refresh` is shorter than the token lifetime so a new token is fetched in the background ([ADR 0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md)) |
 
 # 12. Glossary
 

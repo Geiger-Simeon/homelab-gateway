@@ -4,7 +4,7 @@ Date: 2026-11-15
 
 ## Status
 
-Accepted
+Accepted, auth part amended by [ADR 0018](0018-validate-the-entra-id-token-in-the-portal-api.md)
 
 ## Context
 
