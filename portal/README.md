@@ -10,7 +10,7 @@ Decision and trade-offs: [ADR 0017](../docs/adr/0017-build-the-portal-with-angul
 
 ## Local development
 
-Backend with a fake user (profile `dev`, the app refuses to start with `dev-user` in any other profile):
+Backend with a fake user (profile `dev`, outside this profile the app requires a real Entra ID token):
 
 ```bash
 cd portal/backend
@@ -47,41 +47,53 @@ cd portal/backend && mvn package       # -> target/homelab-portal-<version>.jar
 | `GET /api/services`| signed-in users | services the user has the role for, with status               |
 | `GET /api/system`  | `portal-admin`  | parsed system status file plus `stale` flag, `403` for everyone else, `404` if the file is missing or invalid |
 
-Without the auth headers every endpoint answers `401`. The check sits in `AuthInterceptor` for all of `/api/**`, so new endpoints are covered automatically.
+Without a valid token every endpoint answers `401`. Spring Security guards all of `/api/**`, so new endpoints are covered automatically.
 
-The frontend reloads the page once on a `401` (expired oauth2-proxy session). A second `401` within 30 s shows the error page instead, since that means the headers are missing, not the session.
+The frontend reloads the page once on a `401` (expired oauth2-proxy session). A second `401` within 30 s shows the error page instead, since that means the API didn't get a valid token (nginx/proxy config or expired token from oauth2-proxy), not just an expired session.
 
-## Auth headers
+## Auth
 
-The backend has no login of its own. It trusts these headers (names configurable under `portal.auth`):
+The backend has no login of its own. It validates the Entra ID token that oauth2-proxy forwards. Decision and trade-offs: [ADR 0018](../docs/adr/0018-validate-the-entra-id-token-in-the-portal-api.md).
 
-| Header                              | Content                     |
-|-------------------------------------|-----------------------------|
-| `X-Auth-Request-Preferred-Username` | login name, used for the greeting |
-| `X-Auth-Request-Email`              | email                       |
-| `X-Auth-Request-Groups`             | app roles, comma separated  |
+Flow:
 
-Entra puts app roles into the `roles` claim, groups into `groups` (as object IDs). oauth2-proxy fills the groups header from `groups` by default, so it has to be pointed at `roles` (`oidc_groups_claim = "roles"`). Not verified yet for the `entra-id` provider, check when setting up the proxy.
+1. the browser hits nginx, oauth2-proxy sends it to Entra and sets a session cookie
+2. `set_authorization_header = true` in oauth2-proxy makes the auth_request response carry the Entra ID token as `Authorization`
+3. nginx reads it with `auth_request_set` and forwards it as the `Authorization: Bearer <token>` header to the API
+4. Spring verifies the signature against the Microsoft JWKS, checks issuer, `aud` (the client id), expiry; the `roles` claim becomes Spring `ROLE_*` authorities
 
-That is only safe if:
+Configuration:
 
-- the backend listens on `127.0.0.1` only (`server.address` in `application.yml`)
-- nginx sets these headers on every request from the oauth2-proxy response, so headers sent by a client are overwritten
+| Setting                   | Comes from                                       |
+|---------------------------|--------------------------------------------------|
+| `ENTRA_TENANT_ID`         | tenant id (GUID) of the Entra directory           |
+| `ENTRA_CLIENT_ID`         | application (client) id of the portal app registration |
 
-Sketch for nginx, checked against the oauth2-proxy docs when the proxy is set up:
+Both are required outside the `dev` profile, the app refuses to start without them.
+
+oauth2-proxy (verify when setting up the proxy):
+
+```toml
+set_authorization_header = true
+# token lifetime is about 1 h, refresh in the background so the API never sees an expired one
+# needs a refresh token (scope offline_access), check that the entra-id provider requests it
+cookie_refresh = "55m"
+# app roles ride in the `roles` claim, not `groups`
+oidc_groups_claim = "roles"
+```
+
+nginx sketch:
 
 ```nginx
 location /api/ {
     auth_request /oauth2/auth;
-    auth_request_set $hl_user   $upstream_http_x_auth_request_preferred_username;
-    auth_request_set $hl_email  $upstream_http_x_auth_request_email;
-    auth_request_set $hl_groups $upstream_http_x_auth_request_groups;
-    proxy_set_header X-Auth-Request-Preferred-Username $hl_user;
-    proxy_set_header X-Auth-Request-Email              $hl_email;
-    proxy_set_header X-Auth-Request-Groups             $hl_groups;
+    auth_request_set $hl_token $upstream_http_authorization;
+    proxy_set_header Authorization $hl_token;
     proxy_pass http://127.0.0.1:8081;
 }
 ```
+
+Loopback bind (`server.address = 127.0.0.1`) stays as a second layer, but the real check is the signature.
 
 ## Services
 

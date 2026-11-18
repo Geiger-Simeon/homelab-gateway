@@ -24,8 +24,9 @@ export const sessionInterceptor: HttpInterceptorFn = (req, next) => {
   );
 };
 
-// A second 401 right after a reload means the auth headers are missing (nginx/proxy config),
-// not an expired session. Reloading again would loop forever, so the error page shows instead.
+// A second 401 right after a reload means the API didn't get a valid token (nginx/proxy config
+// or an expired token from oauth2-proxy), not an expired session. Reloading again would loop
+// forever, so the error page shows instead.
 function mayReload(): boolean {
   try {
     const last = Number(sessionStorage.getItem(RELOAD_KEY));
