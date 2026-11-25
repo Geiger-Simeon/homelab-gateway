@@ -295,6 +295,7 @@ Browser, each login in a new private window:
 | `<USER>@` with an `app-*` role but not `portal-admin` | no system panel, `/api/system` gives `403` |
 | `test-unassigned@` | Entra error page (AADSTS50105) |
 | Global Admin | passes Entra, oauth2-proxy answers `403` |
+| normal browser already signed in to Microsoft with another account | account picker, choosing `<USER>@` opens the portal |
 | anyone, Abmelden button (`/logout`) | Microsoft sign-out page (maybe an account picker), then back to the portal and the Microsoft login asks for the password; no silent login |
 | anyone, after logout: `https://cloud.<domain>/` in the same browser, without an open Nextcloud session | Microsoft login asks for the password |
 | anyone, DevTools console | no CSP errors |
