@@ -25,6 +25,7 @@ Options for the login:
 - only users with one of these roles get in (`allowed_groups` on the `roles` claim); this also stops global admins, who skip the Entra assignment
 - scopes `openid profile email offline_access`, the refresh token keeps the ID token fresh (`cookie_refresh` 30m)
 - email taken from `preferred_username`, cloud-only users may have no `email` claim
+- `prompt = select_account`: Entra shows the account picker on every login, otherwise it signs in silently with whatever account the browser already uses, and an admin account without a portal role ends in `403`
 - sessions in the existing Redis (database 1), the browser only gets a ticket cookie `__Host-hl_session`
 - official release binary, version and sha256 pinned in `setup-pi.sh`, own system user and a hardened systemd unit
 - portal on its own hostname `portal.<domain>`, the VPS forwards it like the Nextcloud name
