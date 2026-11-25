@@ -1,0 +1,8 @@
+# /etc/homelab-portal/application.yml on the pi, written by setup-pi.sh
+# overrides for the packaged application.yml
+portal:
+  services:
+    nextcloud:
+      host: cloud.homelab.test
+      url: https://cloud.homelab.test
+      health-url: https://cloud.homelab.test/status.php

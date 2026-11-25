@@ -1,0 +1,27 @@
+# /etc/systemd/system/oauth2-proxy.service on the pi, written by setup-pi.sh
+[Unit]
+Description=oauth2-proxy (entra login for the portal)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+User=oauth2-proxy
+Group=oauth2-proxy
+# redis socket is 770 redis:redis
+SupplementaryGroups=redis
+ExecStart=/usr/local/bin/oauth2-proxy --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+Restart=on-failure
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
