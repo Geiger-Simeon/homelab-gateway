@@ -75,6 +75,7 @@ render() {
     local src=$1 dst=$2 mode=${3:-0644} tmp
     tmp=$(mktemp)
     sed -e "s/cloud\.homelab\.test/${NC_DOMAIN}/g" \
+        -e "s/portal\.homelab\.test/${PORTAL_DOMAIN}/g" \
         -e "s/AllowUsers admin/AllowUsers ${ADMIN_USER}/" \
         "$src" > "$tmp"
     if put "$tmp" "$dst" "$mode"; then rm -f "$tmp"; return 0; fi
