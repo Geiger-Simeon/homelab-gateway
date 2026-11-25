@@ -1,0 +1,30 @@
+# /etc/systemd/system/homelab-portal.service on the pi, written by setup-pi.sh
+[Unit]
+Description=homelab portal api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=homelab-portal
+Group=homelab-portal
+# ENTRA_TENANT_ID, ENTRA_CLIENT_ID of the portal app registration
+EnvironmentFile=/etc/homelab-portal/portal.env
+StateDirectory=homelab-portal
+ExecStart=/usr/bin/java -Xmx256m -jar /opt/homelab-portal/homelab-portal.jar --spring.config.additional-location=optional:file:/etc/homelab-portal/
+Restart=on-failure
+SuccessExitStatus=143
+MemoryMax=512M
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -10,3 +10,6 @@
 #real WireGuard configs contain private keys, only templates go in the repo
 configs/**/wireguard/*.conf
 *.key
+
+#portal build for the pi, assembled by deploy.ps1
+portal-dist/

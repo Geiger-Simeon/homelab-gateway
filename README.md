@@ -4,4 +4,5 @@ Self-hosted VPS gateway providing authenticated access to a home server through 
 ## Setup
 
 - `scripts/deploy.ps1` sets up both hosts from the PC with `scripts/setup-vps.sh` and `scripts/setup-pi.sh`, see `docs/Manual_Setup.md` (phase 7)
+- portal start page behind oauth2-proxy on the Pi: `portal/README.md`, `docs/Manual_Setup.md` (phase 8)
 - architecture: `docs/arc42/architecture.md`, decisions: `docs/adr/`

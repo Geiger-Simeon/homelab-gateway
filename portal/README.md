@@ -39,6 +39,8 @@ cd portal/frontend && npm run build    # -> dist/portal/browser
 cd portal/backend && mvn package       # -> target/homelab-portal-<version>.jar
 ```
 
+The production build doesn't inline critical CSS (`inlineCritical: false` in `angular.json`). With inlining Angular needs an inline script to switch the full stylesheet on, and the CSP on the Pi ([`portal-headers.conf`](../configs/pi/etc/nginx/snippets/portal-headers.conf)) blocks inline scripts, so the page would only get the critical part of the styles.
+
 ## API
 
 | Endpoint           | Who             | Returns                                                       |
@@ -53,7 +55,7 @@ The frontend reloads the page once on a `401` (expired oauth2-proxy session). A 
 
 ## Auth
 
-The backend has no login of its own. It validates the Entra ID token that oauth2-proxy forwards. Decision and trade-offs: [ADR 0018](../docs/adr/0018-validate-the-entra-id-token-in-the-portal-api.md).
+The backend has no login of its own. It validates the Entra ID token that oauth2-proxy forwards. Decision and trade-offs: [ADR 0018](../docs/adr/0018-validate-the-entra-id-token-in-the-portal-api.md), oauth2-proxy itself: [ADR 0019](../docs/adr/0019-put-oauth2-proxy-in-front-of-the-portal.md).
 
 Flow:
 
@@ -67,33 +69,33 @@ Configuration:
 | Setting                   | Comes from                                       |
 |---------------------------|--------------------------------------------------|
 | `ENTRA_TENANT_ID`         | tenant id (GUID) of the Entra directory           |
-| `ENTRA_CLIENT_ID`         | application (client) id of the portal app registration |
+| `ENTRA_CLIENT_ID`         | application (client) id of the Entra app "portal"; on the Pi from `PORTAL_CLIENT_ID` in `.env` |
 
 Both are required outside the `dev` profile, the app refuses to start without them.
 
-oauth2-proxy (verify when setting up the proxy):
+oauth2-proxy, full config in [`configs/pi/etc/oauth2-proxy/oauth2-proxy.cfg`](../configs/pi/etc/oauth2-proxy/oauth2-proxy.cfg):
 
 ```toml
 set_authorization_header = true
+# refresh token for cookie_refresh
+scope = "openid profile email offline_access"
 # token lifetime is about 1 h, refresh in the background so the API never sees an expired one
-# needs a refresh token (scope offline_access), check that the entra-id provider requests it
-cookie_refresh = "55m"
+cookie_refresh = "30m"
 # app roles ride in the `roles` claim, not `groups`
 oidc_groups_claim = "roles"
 ```
 
-nginx sketch:
-
-```nginx
-location /api/ {
-    auth_request /oauth2/auth;
-    auth_request_set $hl_token $upstream_http_authorization;
-    proxy_set_header Authorization $hl_token;
-    proxy_pass http://127.0.0.1:8081;
-}
-```
+nginx: [`configs/pi/etc/nginx/sites-available/portal.conf`](../configs/pi/etc/nginx/sites-available/portal.conf). `/api/` gets the token from `auth_request_set` and answers `401` without a session (the frontend reloads), every other path redirects to `/oauth2/start`. The Abmelden button goes to `/logout`, nginx chains the oauth2-proxy sign out and the Entra logout ([ADR 0019](../docs/adr/0019-put-oauth2-proxy-in-front-of-the-portal.md)); `/oauth2/sign_out` alone would log straight back in through the Entra session.
 
 Loopback bind (`server.address = 127.0.0.1`) stays as a second layer, but the real check is the signature.
+
+## Deployment
+
+- `scripts/deploy.ps1` builds frontend and backend on the PC (`-SkipPortalBuild` takes the existing output), puts both into `portal-dist/` (git-ignored) and copies that to the Pi only
+- `scripts/setup-pi.sh` installs the jar to `/opt/homelab-portal/homelab-portal.jar` and the static files to `/var/www/portal`, systemd unit `homelab-portal` as user `homelab-portal`
+- overrides for the packaged `application.yml` in `/etc/homelab-portal/application.yml`, tenant and client id in `/etc/homelab-portal/portal.env`; the system status file lives in `/var/lib/homelab-portal/`
+- logs: `journalctl -u homelab-portal`
+- setup and checks: phase 8 in [`docs/Manual_Setup.md`](../docs/Manual_Setup.md)
 
 ## Services
 

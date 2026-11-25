@@ -232,6 +232,83 @@ The scripts also run on their own (`sudo bash ~/homelab-gateway/scripts/setup-*.
 | PC | `curl.exe -sk https://<NC_DOMAIN>/status.php` (hosts entry on the vps IP) | JSON with `"installed":true` |
 | browser | login tests from phase 5 and 6 | same results as on the manually built VMs |
 
+## Phase 8: Portal and oauth2-proxy
+
+The portal (`portal.<domain>`) sits behind oauth2-proxy with its own Entra app registration; Nextcloud keeps its `user_oidc` login and is not behind the proxy ([ADR 0019](adr/0019-put-oauth2-proxy-in-front-of-the-portal.md)). Configs in `configs/pi/etc/oauth2-proxy/`, `configs/pi/etc/nginx/`, `configs/pi/etc/homelab-portal/`, `configs/pi/etc/systemd/system/`; installed by `setup-pi.sh`, the build comes from `deploy.ps1`.
+
+Entra (entra.microsoft.com):
+
+1. app registration: App registrations > New registration
+    - name `portal`, single tenant
+    - redirect URI: platform Web, `https://portal.<domain>/oauth2/callback`; access tokens and ID tokens (implicit/hybrid) unchecked
+    - Authentication > Web > Add URI: `https://portal.<domain>/` (with the trailing slash), Entra only returns there after logout if it's registered
+    - Certificates & secrets: new client secret, value into the password manager, expiry date `<DATE>` with a calendar reminder 4 weeks before (like the Nextcloud one)
+    - API permissions: Microsoft Graph delegated `openid`, `profile`, `email`, `offline_access` (plus default `User.Read`), grant admin consent
+2. app roles: App registrations > portal > App roles > Create app role, allowed member types Users/Groups, enabled:
+
+    | Display name     | Value           |
+    |------------------|-----------------|
+    | Portal Admin     | `portal-admin`  |
+    | Nextcloud        | `app-nextcloud` |
+    | Jellyfin         | `app-jellyfin`  |
+    | Rezepte          | `app-rezepte`   |
+    | Kalorien         | `app-kalorien`  |
+
+3. enterprise application: Enterprise applications > portal
+    - Properties: enabled for sign in yes, assignment required yes, visible to users no
+    - Users and groups: assign `<USER>@` once per role (Entra Free takes one role per assignment), e.g. `portal-admin` and `app-nextcloud`; `test-unassigned@` stays unassigned
+4. values for `.env`: `PORTAL_CLIENT_ID="<CLIENT_ID>"` (application ID of `portal`), `PORTAL_DOMAIN`; the tenant ID is the same as for Nextcloud
+
+Then `deploy.ps1` as in phase 7. New on the PC: Node and Maven for the portal build (`-SkipPortalBuild` takes the existing build output). New prompt on the Pi: the client secret of the `portal` app, after the Nextcloud one, only while `/etc/oauth2-proxy/client-secret` doesn't exist. The PC's hosts file needs `portal.<domain>` on the vps IP as well.
+
+Before the first run, in the Pi-VM: `apt-cache policy openjdk-21-jre-headless` shows a candidate (same check later on Raspberry Pi OS).
+
+### Verify
+
+Pi-VM:
+
+| Check | Expected |
+|-------|----------|
+| end of `setup-pi.sh` | `active` eight times, `oauth2-proxy ping: 200` |
+| `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/api/me` | `401`, the API wants a token even from the Pi itself |
+| `sudo ss -ltnp \| grep -E ':(4180\|8081)'` | both on `127.0.0.1` only |
+| `systemctl status homelab-portal` | `Memory:` well below `MemoryMax` (512M) after some clicks |
+| `journalctl -u oauth2-proxy -b` | no Redis or config errors |
+| `journalctl -u homelab-portal \| grep "health check"` | no `WARN` for nextcloud (JVM trusts the test certificate) |
+
+PC (hosts entry on the vps IP):
+
+| Command | Expected |
+|---------|----------|
+| `curl.exe -sk -o NUL -w "%{http_code} %{redirect_url}" https://portal.<domain>/` | `302 .../oauth2/start?rd=/` |
+| `curl.exe -sk -o NUL -w "%{http_code} %{redirect_url}" https://portal.<domain>/oauth2/start` | `302 https://login.microsoftonline.com/...` with `code_challenge` |
+| `curl.exe -sk -o NUL -w "%{http_code}" https://portal.<domain>/api/me` | `401`, no redirect |
+| `curl.exe -sk -o NUL -w "%{http_code}" -H "Authorization: Bearer x" https://portal.<domain>/api/me` | `401`, a client header doesn't get through |
+| `curl.exe -sk -o NUL -w "%{http_code}" https://cloud.<domain>/status.php` | `200`, Nextcloud unaffected |
+
+Browser, each login in a new private window:
+
+| Who | Expected |
+|-----|----------|
+| `<USER>@` with `app-nextcloud` | portal with the Nextcloud tile, status online |
+| `<USER>@` with `portal-admin` | system panel visible |
+| `<USER>@` with an `app-*` role but not `portal-admin` | no system panel, `/api/system` gives `403` |
+| `test-unassigned@` | Entra error page (AADSTS50105) |
+| Global Admin | passes Entra, oauth2-proxy answers `403` |
+| anyone, Abmelden button (`/logout`) | Microsoft sign-out page (maybe an account picker), then back to the portal and the Microsoft login asks for the password; no silent login |
+| anyone, after logout: `https://cloud.<domain>/` in the same browser, without an open Nextcloud session | Microsoft login asks for the password |
+| anyone, DevTools console | no CSP errors |
+| anyone, DevTools cookies | only `__Host-hl_session`, `Secure`, `HttpOnly`, `SameSite=Lax`, a short ticket value |
+
+Redis, after a login:
+
+```bash
+sudo redis-cli -s /run/redis/redis-server.sock -n 1 --scan    # one key per session
+sudo redis-cli -s /run/redis/redis-server.sock -n 0 dbsize    # nextcloud keys, unchanged by the logins
+```
+
+Token refresh: keep the portal open longer than an hour (ID token lifetime), then reload. Expected: tiles load without a redirect to Entra, no `401` from `/api/*`, `journalctl -u oauth2-proxy` shows a refreshed session.
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs

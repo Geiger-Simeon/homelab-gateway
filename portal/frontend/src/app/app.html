@@ -15,8 +15,8 @@
         <mat-icon [svgIcon]="isDark() ? 'light-mode' : 'dark-mode'" />
       </button>
 
-      <!-- oauth2-proxy endpoint, see docs/NOTES.md for the Entra logout redirect -->
-      <a mat-button href="/oauth2/sign_out" class="logout">
+      <!-- nginx chains the oauth2-proxy sign out and the entra logout -->
+      <a mat-button href="/logout" class="logout">
         <mat-icon svgIcon="logout" />
         <span class="logout-label">Abmelden</span>
       </a>

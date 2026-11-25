@@ -97,15 +97,15 @@ flowchart LR
 |--------------------|------|------------------------------------------------------------------|--------------|
 | WireGuard server   | VPS  | endpoint of the tunnel, listens on UDP 51820                     | done (VM)    |
 | Firewall           | VPS  | nftables, only SSH, 443 and WireGuard, nothing new from the tunnel, rate limits for new SSH and HTTPS connections per IP | done (VM)  |
-| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames into the tunnel, adds the PROXY header, limits open connections per IP | done (VM) |
+| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames (`cloud`, `portal`) into the tunnel, adds the PROXY header, limits open connections per IP | done (VM) |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
 | Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
-| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud | done (VM), test certificate |
+| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud and the portal | done (VM), test certificate |
 | Nextcloud          | Pi   | application, data on the separate data disk                      | done (VM), exists on the real Pi |
 | `user_oidc`        | Pi   | OIDC login against Entra ID, maps app roles to groups, rejects users without an `nc-` role | done (VM) |
-| Portal frontend    | Pi   | Angular start page, tiles per app role, system overview for `portal-admin`, served by nginx as static files | code, not deployed |
-| Portal API         | Pi   | Spring Boot on `127.0.0.1:8081`, Spring Security resource server that validates the Entra ID token forwarded by oauth2-proxy, service status, system status file | code, not deployed |
-| Auth proxy         | Pi   | oauth2-proxy in front of the portal and own apps, login against Entra, roles per hostname | planned |
+| Portal frontend    | Pi   | Angular start page, tiles per app role, system overview for `portal-admin`, served by nginx as static files | done (VM) |
+| Portal API         | Pi   | Spring Boot on `127.0.0.1:8081`, Spring Security resource server that validates the Entra ID token forwarded by oauth2-proxy, service status, system status file | done (VM) |
+| Auth proxy         | Pi   | oauth2-proxy on `127.0.0.1:4180` in front of the portal (later own apps), login against the Entra app "portal", sessions in Redis, only users with a portal app role ([ADR 0019](../adr/0019-put-oauth2-proxy-in-front-of-the-portal.md)) | done (VM) |
 
 # 6. Runtime View
 
@@ -177,6 +177,7 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 
 - private keys are generated on the machine that uses them and never leave it
 - client secret lives in the password manager, expiry date noted; it goes into `occ` through an environment variable (`--clientsecret-env`), never as a command line argument, because the shell history records every command
+- client secret of the portal app: asked for on the terminal by `setup-pi.sh`, written to `/etc/oauth2-proxy/client-secret` (`0640 root:oauth2-proxy`), next to the generated cookie secret
 - `configs/<host>/` mirrors the paths on each machine; configs without secrets (nftables) are committed as they are, WireGuard only as templates (`*.conf.example`), the real files are git-ignored
 - `/etc/.git` (etckeeper) contains private keys and is never pushed
 - SSH key on the PC with a passphrase, passphrase and fingerprint in the password manager; TOTP backup codes of the local admin there as well
@@ -237,7 +238,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md) | 2FA enforced only for the local admin | accepted |
 | [0016](../adr/0016-install-updates-automatically-with-a-nightly-reboot.md) | Automatic updates with a nightly reboot | accepted |
 | [0017](../adr/0017-build-the-portal-with-angular-and-spring-boot.md) | Portal with Angular and Spring Boot | accepted, auth part amended by 0018 |
-| [0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md) | Validate the Entra ID token in the portal API | accepted |
+| [0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md) | Validate the Entra ID token in the portal API | accepted, Nextcloud part corrected by 0019 |
+| [0019](../adr/0019-put-oauth2-proxy-in-front-of-the-portal.md) | oauth2-proxy in front of the portal, not Nextcloud | accepted |
 
 # 10. Quality Requirements
 
@@ -269,7 +271,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | access removed in Entra, but existing app passwords keep working (groups only update at an OIDC login), confirmed in a test | remove the Entra assignment and `occ user:disable` the user, or revoke the app passwords with `occ user:auth-tokens:delete` |
 | local admin login stays reachable via `/login?direct=1`              | strong password, brute force protection, TOTP enforced ([ADR 0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md)) |
 | Azure for Students ends after studying; tenant without subscription isn't officially guaranteed | no Azure resources in the subscription; fallback Auth0, migration only affects the login layer |
-| client secret expires, login breaks                                   | expiry date in the password manager, calendar reminder 4 weeks ahead; later monitoring |
+| client secrets of the Nextcloud and the portal app expire, login breaks | expiry dates in the password manager, calendar reminder 4 weeks ahead; later monitoring |
+| oauth2-proxy is a pinned binary, not updated by unattended-upgrades   | watch the GitHub releases, bump version and hash in `setup-pi.sh`; listens on loopback only |
 | Nextcloud isn't updated by unattended-upgrades                         | `occ update:check`, update notification in the admin UI, documented update path; later monitoring |
 | a nightly automatic reboot leaves a host down                          | snapshots in testing; uptime monitoring outside the Pi (open) |
 | several users behind one IP (CGNAT, office) share the rate limits     | limits far above browser and desktop client needs, counters show drops |

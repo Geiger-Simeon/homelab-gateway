@@ -7,7 +7,7 @@ source "$(dirname "$0")/lib.sh"
 
 require_root
 load_env
-require_vars NC_DOMAIN ADMIN_USER
+require_vars NC_DOMAIN PORTAL_DOMAIN ADMIN_USER
 
 log "packages"
 setup_etckeeper
