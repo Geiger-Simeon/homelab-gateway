@@ -1,13 +1,16 @@
-# runs the whole setup from the PC: copies the repo files, runs setup-vps.sh and setup-pi.sh
-# and passes the wireguard public keys between both hosts
+# runs the whole setup from the PC: builds the portal, copies the repo files, runs setup-vps.sh
+# and setup-pi.sh and passes the wireguard public keys between both hosts
 # usage (from the repo): .\scripts\deploy.ps1 -VpsIp 192.168.178.38 -PiIp 192.168.178.169
-# needs: Debian with SSH server and a sudo user on both hosts, .env filled in, key in ~/.ssh
+# needs: Debian with SSH server and a sudo user on both hosts, .env filled in, key in ~/.ssh,
+#        node and maven on the PC for the portal build
 param(
     [Parameter(Mandatory = $true)][string]$VpsIp,
     [Parameter(Mandatory = $true)][string]$PiIp,
     # default: ADMIN_USER from .env
     [string]$User = '',
-    [string]$PubKeyFile = "$env:USERPROFILE\.ssh\id_ed25519.pub"
+    [string]$PubKeyFile = "$env:USERPROFILE\.ssh\id_ed25519.pub",
+    # take the existing build output instead of building the portal again
+    [switch]$SkipPortalBuild
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -43,7 +46,7 @@ function KeyLoginWorks($ip) {
     return $ok
 }
 
-function Prepare($ip) {
+function Prepare($ip, [string[]]$Extra = @()) {
     # key login first, asks for the password only once per host
     if (-not (KeyLoginWorks $ip)) {
         Step "installing ssh key on $ip (password of $User)"
@@ -52,14 +55,40 @@ function Prepare($ip) {
     }
     Step "copying files to $ip"
     Remote $ip 'rm -rf ~/homelab-gateway && mkdir -p ~/homelab-gateway'
-    & scp.exe @sshOpts -q -r configs scripts .env "${User}@${ip}:homelab-gateway/"
+    & scp.exe @sshOpts -q -r configs scripts .env @Extra "${User}@${ip}:homelab-gateway/"
     if ($LASTEXITCODE -ne 0) { throw "scp to $ip failed" }
 }
 
 function PubKey($ip) { (& ssh.exe @sshOpts "$User@$ip" 'cat ~/homelab-gateway/wg-gw.pub').Trim() }
 
+if (-not $SkipPortalBuild) {
+    Step 'building the portal'
+    Push-Location portal\frontend
+    try {
+        npm ci; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+        npm run build; if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' }
+    } finally { Pop-Location }
+    Push-Location portal\backend
+    try {
+        # clean, an old version's jar in target would make two
+        mvn -q clean package; if ($LASTEXITCODE -ne 0) { throw 'backend build failed' }
+    } finally { Pop-Location }
+}
+
+# git-ignored, setup-pi.sh takes it from ~/homelab-gateway/portal-dist
+Step 'collecting the portal build in portal-dist'
+$jars = @(Get-ChildItem 'portal\backend\target' -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'homelab-portal-*.jar' })
+if ($jars.Count -ne 1) { throw "expected one homelab-portal-*.jar in portal\backend\target, found $($jars.Count)" }
+$browser = 'portal\frontend\dist\portal\browser'
+if (-not (Test-Path "$browser\index.html")) { throw "$browser\index.html missing, build the frontend first" }
+if (Test-Path 'portal-dist') { Remove-Item -Recurse -Force 'portal-dist' }
+New-Item -ItemType Directory 'portal-dist' | Out-Null
+Copy-Item $jars[0].FullName 'portal-dist\homelab-portal.jar'
+Copy-Item -Recurse $browser 'portal-dist\browser'
+
 Prepare $VpsIp
-Prepare $PiIp
+Prepare $PiIp 'portal-dist'
 
 Step 'vps, first run (sudo password)'
 Remote $VpsIp 'sudo bash ~/homelab-gateway/scripts/setup-vps.sh' -Tty
@@ -78,4 +107,4 @@ Remote $PiIp 'rm -f ~/homelab-gateway/.env'
 
 Write-Host "vps public key: $vpsKey"
 Write-Host "pi public key:  $piKey"
-Write-Host "`nDone. Point cloud.homelab.test in the hosts file to $VpsIp, then set up TOTP for the local admin (/login?direct=1)."
+Write-Host "`nDone. Point cloud.homelab.test and portal.homelab.test in the hosts file to $VpsIp, then set up TOTP for the local admin (/login?direct=1)."
