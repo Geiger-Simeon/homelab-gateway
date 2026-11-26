@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sets up the pi: wireguard client, nftables, mariadb, redis, php, nextcloud with user_oidc, oauth2-proxy, portal, updates, ssh
+# sets up the pi: wireguard client, nftables, mariadb, redis, php, nextcloud with user_oidc, oauth2-proxy, portal, let's encrypt certificate, updates, ssh
 # usage: sudo bash scripts/setup-pi.sh   (reads .env from the repo root, or ENV_FILE)
 # secrets are asked for on the terminal when needed, they can also come from the environment
 # safe to run again, see docs/Manual_Setup.md
@@ -19,7 +19,7 @@ PORTAL_DIST="$REPO_DIR/portal-dist"
 
 occ() { runuser -u www-data -- php "$NC_DIR/occ" "$@"; }
 
-# self-signed for testing, the real certificate comes with go-live
+# self-signed for tests, and a placeholder until the let's encrypt certificate is there
 test_cert() {
     local domain=$1
     [[ -f /etc/ssl/nginx/$domain.crt ]] && return
@@ -91,6 +91,14 @@ require_root
 load_env
 require_vars NC_DOMAIN ADMIN_USER LAN_CIDR DATA_DIR VPS_ENDPOINT ENTRA_TENANT_ID ENTRA_CLIENT_ID \
     PORTAL_DOMAIN PORTAL_CLIENT_ID
+if [[ -n ${ACME_DOMAIN:-} ]]; then
+    require_vars ACME_EMAIL
+    # the wildcard covers exactly one label
+    for name in "$NC_DOMAIN" "$PORTAL_DOMAIN"; do
+        [[ $name == *."$ACME_DOMAIN" && ${name%."$ACME_DOMAIN"} != *.* ]] \
+            || die "$name is not one label below ACME_DOMAIN=$ACME_DOMAIN"
+    done
+fi
 NC_ADMIN_USER=${NC_ADMIN_USER:-ncadmin}
 NC_SHARE_EXPIRE_DAYS=${NC_SHARE_EXPIRE_DAYS:-7}
 NC_PHONE_REGION=${NC_PHONE_REGION:-DE}
@@ -173,6 +181,40 @@ install -d -m 0750 -o www-data -g www-data "$DATA_DIR/nextcloud-data"
 log "certificates"
 test_cert "$NC_DOMAIN"
 test_cert "$PORTAL_DOMAIN"
+if [[ -n ${ACME_DOMAIN:-} ]]; then
+    log "let's encrypt certificate"
+    apt_install lego
+    install -d -m 0700 /etc/lego /var/lib/lego
+    if [[ ! -f /etc/lego/desec-token ]]; then
+        ask_secret DESEC_TOKEN "deSEC token (TXT on _acme-challenge.acme.$ACME_DOMAIN only)"
+        (umask 077 && printf '%s' "$DESEC_TOKEN" > /etc/lego/desec-token)
+        unset DESEC_TOKEN
+    fi
+    tmp=$(mktemp)
+    printf 'ACME_DOMAIN="%s"\nACME_EMAIL="%s"\nCERT_NAMES="%s %s"\n' \
+        "$ACME_DOMAIN" "$ACME_EMAIL" "$NC_DOMAIN" "$PORTAL_DOMAIN" > "$tmp"
+    put "$tmp" /etc/lego/homelab-cert.env 0600 || true
+    rm -f "$tmp"
+    put "$REPO_DIR/configs/pi/usr/local/sbin/homelab-cert" /usr/local/sbin/homelab-cert 0755 || true
+    put "$REPO_DIR/configs/pi/usr/local/sbin/homelab-cert-deploy" /usr/local/sbin/homelab-cert-deploy 0755 || true
+    cert_units=0
+    put "$REPO_DIR/configs/pi/etc/systemd/system/homelab-cert.service" /etc/systemd/system/homelab-cert.service && cert_units=1
+    put "$REPO_DIR/configs/pi/etc/systemd/system/homelab-cert.timer" /etc/systemd/system/homelab-cert.timer && cert_units=1
+    if [[ $cert_units -eq 1 ]]; then
+        systemctl daemon-reload
+    fi
+    systemctl enable -q --now homelab-cert.timer
+    acme_crt="/var/lib/lego/certificates/_.$ACME_DOMAIN.crt"
+    # the first certificate takes a few minutes (desec propagation), renewals are the timer's job
+    if [[ ! -f $acme_crt ]]; then
+        /usr/local/sbin/homelab-cert \
+            || warn "no let's encrypt certificate, the test one stays (rerun /usr/local/sbin/homelab-cert to see why)"
+    fi
+    # certificate there but nginx still has another one, e.g. the hook failed
+    if [[ -f $acme_crt ]] && ! cmp -s "$acme_crt" "/etc/ssl/nginx/$NC_DOMAIN.crt"; then
+        /usr/local/sbin/homelab-cert-deploy
+    fi
+fi
 # test only: the portal health check (java) has to trust the self-signed nextcloud cert;
 # runs after the java install, the ca-certificates-java hook updates the java truststore
 nc_ca="/usr/local/share/ca-certificates/homelab-test-$NC_DOMAIN.crt"
@@ -373,6 +415,10 @@ log "done"
 echo "pi public key (VPS side: PI_WG_PUBLIC_KEY): $WG_OWN_PUBKEY"
 echo
 systemctl is-active nftables nginx mariadb redis-server "php$PHP_VER-fpm" wg-quick@wg-gw oauth2-proxy homelab-portal || true
+if [[ -n ${ACME_DOMAIN:-} ]]; then
+    systemctl is-active homelab-cert.timer || true
+fi
+openssl x509 -in "/etc/ssl/nginx/$NC_DOMAIN.crt" -noout -issuer -enddate
 wg show wg-gw latest-handshakes 2> /dev/null || true
 occ status
 curl -sk "https://$NC_DOMAIN/status.php"; echo
