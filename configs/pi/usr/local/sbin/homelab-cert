@@ -1,0 +1,20 @@
+#!/bin/bash
+# /usr/local/sbin/homelab-cert on the pi, written by setup-pi.sh
+# gets or renews the wildcard certificate (lego, dns-01 through desec), run by homelab-cert.timer
+# optional argument: days left before renewing (default 30), a higher value forces a renewal
+set -euo pipefail
+
+# ACME_DOMAIN, ACME_EMAIL, written by setup-pi.sh
+# shellcheck source=/dev/null
+. /etc/lego/homelab-cert.env
+DESEC_TOKEN=$(< /etc/lego/desec-token)
+export DESEC_TOKEN
+# desec needs about two minutes until all its nameservers have the record, lego 4.9 waits 60 s by default
+export DESEC_PROPAGATION_TIMEOUT=600 DESEC_POLLING_INTERVAL=10
+
+args=(--accept-tos --email "$ACME_EMAIL" --dns desec --domains "*.$ACME_DOMAIN" --path /var/lib/lego)
+if [[ -f /var/lib/lego/certificates/_.$ACME_DOMAIN.crt ]]; then
+    lego "${args[@]}" renew --days "${1:-30}" --renew-hook /usr/local/sbin/homelab-cert-deploy
+else
+    lego "${args[@]}" run --run-hook /usr/local/sbin/homelab-cert-deploy
+fi

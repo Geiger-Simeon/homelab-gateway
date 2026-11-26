@@ -1,0 +1,17 @@
+#!/bin/bash
+# /usr/local/sbin/homelab-cert-deploy on the pi, written by setup-pi.sh
+# lego hook: copies the new certificate to the paths the nginx sites use
+set -euo pipefail
+
+# ACME_DOMAIN, CERT_NAMES, written by setup-pi.sh
+# shellcheck source=/dev/null
+. /etc/lego/homelab-cert.env
+src=/var/lib/lego/certificates/_.$ACME_DOMAIN
+for name in $CERT_NAMES; do
+    install -m 0644 -o root -g root "$src.crt" "/etc/ssl/nginx/$name.crt"
+    install -m 0600 -o root -g root "$src.key" "/etc/ssl/nginx/$name.key"
+done
+if systemctl is-active -q nginx && nginx -t -q; then
+    systemctl reload nginx
+fi
+echo "certificate deployed for $CERT_NAMES"

@@ -107,4 +107,4 @@ Remote $PiIp 'rm -f ~/homelab-gateway/.env'
 
 Write-Host "vps public key: $vpsKey"
 Write-Host "pi public key:  $piKey"
-Write-Host "`nDone. Point cloud.homelab.test and portal.homelab.test in the hosts file to $VpsIp, then set up TOTP for the local admin (/login?direct=1)."
+Write-Host "`nDone. NC_DOMAIN and PORTAL_DOMAIN have to point to $VpsIp (DNS A records, or the hosts file for .test names), then set up TOTP for the local admin (/login?direct=1)."
