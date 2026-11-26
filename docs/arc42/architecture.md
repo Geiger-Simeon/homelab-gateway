@@ -100,7 +100,8 @@ flowchart LR
 | TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames (`cloud`, `portal`) into the tunnel, adds the PROXY header, limits open connections per IP | done (VM) |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
 | Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
-| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud and the portal | done (VM), test certificate |
+| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud and the portal | done (VM) |
+| Certificate        | Pi   | wildcard `*.<domain>` from Let's Encrypt, DNS-01 through a deSEC subzone (`_acme-challenge` is a CNAME into it), lego from Debian, daily timer with a hook that copies it for nginx; `.test` names keep a self-signed one ([ADR 0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md)) | done (VM, real domain) |
 | Nextcloud          | Pi   | application, data on the separate data disk                      | done (VM), exists on the real Pi |
 | `user_oidc`        | Pi   | OIDC login against Entra ID, maps app roles to groups, rejects users without an `nc-` role | done (VM) |
 | Portal frontend    | Pi   | Angular start page, tiles per app role, system overview for `portal-admin`, served by nginx as static files | done (VM) |
@@ -178,6 +179,7 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 - private keys are generated on the machine that uses them and never leave it
 - client secret lives in the password manager, expiry date noted; it goes into `occ` through an environment variable (`--clientsecret-env`), never as a command line argument, because the shell history records every command
 - client secret of the portal app: asked for on the terminal by `setup-pi.sh`, written to `/etc/oauth2-proxy/client-secret` (`0640 root:oauth2-proxy`), next to the generated cookie secret
+- deSEC token: asked for by `setup-pi.sh`, written to `/etc/lego/desec-token` (`0600 root`), copy in the password manager; its token policy only allows TXT on `_acme-challenge.acme.<domain>`
 - `configs/<host>/` mirrors the paths on each machine; configs without secrets (nftables) are committed as they are, WireGuard only as templates (`*.conf.example`), the real files are git-ignored
 - `/etc/.git` (etckeeper) contains private keys and is never pushed
 - SSH key on the PC with a passphrase, passphrase and fingerprint in the password manager; TOTP backup codes of the local admin there as well
@@ -240,6 +242,7 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0017](../adr/0017-build-the-portal-with-angular-and-spring-boot.md) | Portal with Angular and Spring Boot | accepted, auth part amended by 0018 |
 | [0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md) | Validate the Entra ID token in the portal API | accepted, Nextcloud part corrected by 0019 |
 | [0019](../adr/0019-put-oauth2-proxy-in-front-of-the-portal.md) | oauth2-proxy in front of the portal, not Nextcloud | accepted |
+| [0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md) | Certificate with DNS-01 through deSEC | accepted |
 
 # 10. Quality Requirements
 
@@ -266,13 +269,15 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | Risk                                                                 | Mitigation                                                                  |
 |----------------------------------------------------------------------|-----------------------------------------------------------------------------|
 | pre-auth vulnerability in the reverse proxy or Nextcloud is reachable from the internet | updates, rate limits, brute force protection, monitoring |
-| compromised VPS requests its own certificate for the domain           | CAA record, certificate transparency monitoring                            |
+| compromised VPS requests its own certificate for the domain           | CAA record limited to Let's Encrypt and `dns-01`, the VPS has no DNS access; certificate transparency monitoring (open) |
 | Global Admins bypass "assignment required" in Entra                   | admin account only for management, 2-step verification; Nextcloud rejects users without an `nc-` app role ([ADR 0013](../adr/0013-restrict-the-nextcloud-login-to-users-with-an-app-role.md)) |
 | access removed in Entra, but existing app passwords keep working (groups only update at an OIDC login), confirmed in a test | remove the Entra assignment and `occ user:disable` the user, or revoke the app passwords with `occ user:auth-tokens:delete` |
 | local admin login stays reachable via `/login?direct=1`              | strong password, brute force protection, TOTP enforced ([ADR 0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md)) |
 | Azure for Students ends after studying; tenant without subscription isn't officially guaranteed | no Azure resources in the subscription; fallback Auth0, migration only affects the login layer |
 | client secrets of the Nextcloud and the portal app expire, login breaks | expiry dates in the password manager, calendar reminder 4 weeks ahead; later monitoring |
 | oauth2-proxy is a pinned binary, not updated by unattended-upgrades   | watch the GitHub releases, bump version and hash in `setup-pi.sh`; listens on loopback only |
+| certificate renewal fails unnoticed, Let's Encrypt sends no expiry mails anymore | daily timer, renewal 30 days ahead, `journalctl -u homelab-cert`; later monitoring |
+| deSEC, or the NS/CNAME records for it at netcup, break                | renewal fails as above; records in `Manual_Setup.md` phase 9 |
 | Nextcloud isn't updated by unattended-upgrades                         | `occ update:check`, update notification in the admin UI, documented update path; later monitoring |
 | a nightly automatic reboot leaves a host down                          | snapshots in testing; uptime monitoring outside the Pi (open) |
 | several users behind one IP (CGNAT, office) share the rate limits     | limits far above browser and desktop client needs, counters show drops |
