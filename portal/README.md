@@ -107,7 +107,7 @@ Configured in `backend/src/main/resources/application.yml` under `portal.service
 - `status-override`: fixed status, wins over `health-url`
 - neither: shown as "Status unbekannt"
 
-The health URL must not go through oauth2-proxy (a redirect or `401` counts as offline), and the JVM has to trust its certificate. Status changes and their reason are logged as `WARN`, e.g. `journalctl -u homelab-portal | grep "health check"`.
+The health URL must not go through oauth2-proxy (a redirect or `401` counts as offline), and the JVM has to trust its certificate (Let's Encrypt works out of the box, `setup-pi.sh` adds the self-signed test certificate to the truststore). Status changes and their reason are logged as `WARN`, e.g. `journalctl -u homelab-portal | grep "health check"`.
 
 `icon` is one of the icons in `frontend/src/app/core/icons.ts`, `color` one of `blue`, `purple`, `orange`, `teal`.
 

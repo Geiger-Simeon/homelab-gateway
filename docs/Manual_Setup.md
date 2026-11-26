@@ -310,6 +310,82 @@ sudo redis-cli -s /run/redis/redis-server.sock -n 0 dbsize    # nextcloud keys, 
 
 Token refresh: keep the portal open longer than an hour (ID token lifetime), then reload. Expected: tiles load without a redirect to Entra, no `401` from `/api/*`, `journalctl -u oauth2-proxy` shows a refreshed session.
 
+## Phase 9: Let's Encrypt certificate
+
+Real domain only; with `.test` names `setup-pi.sh` keeps the self-signed certificates. One wildcard certificate `*.<domain>` through DNS-01. netcup stays the DNS provider, only `acme.<domain>` is delegated to deSEC, and the token on the Pi may only write the challenge record there ([ADR 0020](adr/0020-get-the-certificate-with-dns-01-through-desec.md)).
+
+DNS at netcup (CCP > Domains > the domain > DNS, deploying the zone takes a few minutes):
+
+| Host | Type | Destination |
+|------|------|-------------|
+| `cloud` | A | VPS IPv4 |
+| `portal` | A | VPS IPv4 |
+| `acme` | NS | `ns1.desec.io.` |
+| `acme` | NS | `ns2.desec.org.` |
+| `_acme-challenge` | CNAME | `_acme-challenge.acme.<domain>.` |
+| `@` | CAA | `0 issue "letsencrypt.org; validationmethods=dns-01"` |
+
+The CAA record keeps every other CA and every other challenge type out; a compromised VPS sees the traffic for the domain but can't answer DNS-01.
+
+deSEC (desec.io):
+
+1. account, then a new domain `acme.<domain>`; skip the "delegate" and "DNSSEC" steps shown afterwards, the NS records at netcup are the delegation
+2. token for the Pi, on any Linux shell with `curl` and `jq` (password via `printf`, a builtin, so it isn't in the process list; doesn't work with `"` or `\` in the password):
+
+```bash
+read -r -p 'deSEC email: ' DESEC_EMAIL
+read -rs -p 'deSEC password: ' DESEC_PASSWORD; echo
+DESEC_ZONE=acme.<domain>
+API=https://desec.io/api/v1
+ADMIN_TOKEN=$(printf '{"email":"%s","password":"%s"}' "$DESEC_EMAIL" "$DESEC_PASSWORD" \
+  | curl -sS -X POST "$API/auth/login/" -H 'Content-Type: application/json' --data @- | jq -r .token)
+unset DESEC_PASSWORD
+TOKEN_JSON=$(curl -sS -X POST "$API/auth/tokens/" -H "Authorization: Token $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' --data '{"name":"pi acme"}')
+TOKEN_ID=$(jq -r .id <<< "$TOKEN_JSON")
+DESEC_TOKEN=$(jq -r .token <<< "$TOKEN_JSON")
+unset TOKEN_JSON
+# default policy first: no write anywhere
+curl -sS -X POST "$API/auth/tokens/$TOKEN_ID/policies/rrsets/" -H "Authorization: Token $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' --data '{"domain":null,"subname":null,"type":null}'; echo
+curl -sS -X POST "$API/auth/tokens/$TOKEN_ID/policies/rrsets/" -H "Authorization: Token $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data "{\"domain\":\"$DESEC_ZONE\",\"subname\":\"_acme-challenge\",\"type\":\"TXT\",\"perm_write\":true}"; echo
+curl -sS -X POST "$API/auth/logout/" -H "Authorization: Token $ADMIN_TOKEN" -o /dev/null -w 'logout: %{http_code}\n'
+unset ADMIN_TOKEN
+echo "$DESEC_TOKEN"    # once, into the password manager
+```
+
+3. check that the token can't write anywhere else, expected `403`:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$API/domains/$DESEC_ZONE/rrsets/" \
+  -H "Authorization: Token $DESEC_TOKEN" -H 'Content-Type: application/json' \
+  --data '{"subname":"test","type":"TXT","ttl":3600,"records":["\"x\""]}'
+unset DESEC_TOKEN
+```
+
+`.env`: `ACME_DOMAIN="<domain>"`, `ACME_EMAIL` (contact of the Let's Encrypt account, not in the certificate). `NC_DOMAIN` and `PORTAL_DOMAIN` have to be exactly one label below `ACME_DOMAIN`.
+
+Then `deploy.ps1` as in phase 7. New prompt on the Pi: the deSEC token, only while `/etc/lego/desec-token` doesn't exist. The first certificate takes two to four minutes, deSEC needs about two until all its nameservers have the record. If it fails, the test certificate stays and the run goes on; `sudo /usr/local/sbin/homelab-cert` shows why.
+
+### Verify
+
+| Where | Check | Expected |
+|-------|-------|----------|
+| Pi, end of `setup-pi.sh` | output | `active` for `homelab-cert.timer`, issuer `Let's Encrypt` without `STAGING` |
+| Pi | `systemctl list-timers homelab-cert.timer` | next run at night, before the reboot at 04:30 |
+| Pi | `sudo systemctl start homelab-cert.service; journalctl -u homelab-cert -n 20` | no renewal needed, no errors |
+| Pi | `sudo ls -l /etc/lego` | everything `root`, `desec-token` `-rw-------` |
+| Pi | `ls /usr/local/share/ca-certificates/` | no `homelab-test-*` file anymore |
+| Pi | serial before and after `sudo /usr/local/sbin/homelab-cert 90` (forced renewal, costs one certificate of the weekly limit) | `certificate deployed for ...`, new serial in `/etc/ssl/nginx/` |
+| PC | `curl.exe -s -o NUL -w "%{http_code} verify=%{ssl_verify_result}" https://<NC_DOMAIN>/status.php` | `200 verify=0`, without `-k` |
+| PC | same for `https://<PORTAL_DOMAIN>/` | `302 verify=0` |
+| browser | both names | padlock, no warning; turn warnings back on where they were skipped for the test certificate |
+| portal | Nextcloud tile | online, the JVM trusts Let's Encrypt without the test CA |
+| phone, mobile data | both names, Nextcloud app | no certificate question |
+| PC | `deploy.ps1` again | no token prompt, no lego run |
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
