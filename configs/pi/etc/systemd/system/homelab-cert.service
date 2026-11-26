@@ -1,0 +1,15 @@
+# /etc/systemd/system/homelab-cert.service on the pi, written by setup-pi.sh
+[Unit]
+Description=let's encrypt certificate check (lego, dns-01 through desec)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-cert
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+# full makes /etc read-only, the hook writes the nginx certificates
+ReadWritePaths=/etc/ssl/nginx
+NoNewPrivileges=yes
