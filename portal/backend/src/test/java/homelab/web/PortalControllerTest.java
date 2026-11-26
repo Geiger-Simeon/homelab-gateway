@@ -25,6 +25,7 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -216,6 +217,19 @@ class PortalControllerTest {
 
         // then
         result.andExpect(status().isNotFound());
+    }
+
+    // bearer requests skip csrf by design, without a token the filter has to answer before auth (403, not 401)
+    @Test
+    void givenNoToken_whenPostingWithoutCsrfToken_thenForbidden() throws Exception {
+        // given
+        final var request = post("/api/me");
+
+        // when
+        final var result = mvc.perform(request);
+
+        // then
+        result.andExpect(status().isForbidden());
     }
 
     @Test
