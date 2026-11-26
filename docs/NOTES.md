@@ -50,7 +50,7 @@ sudo apt install etckeeper
 - disk 1 (20 GB): system, disk 2 (30 GB): data, mirrors SD card + SSD on the real Pi
 - data disk mounted via UUID in `/etc/fstab`, mount point `/mnt/data` (`/dev/sdb1`, ext4)
 - check: `findmnt /mnt/data`
-- TODO: fstab line
+- fstab line, as `setup-pi.sh` writes it: `UUID=<uuid> /mnt/data ext4 defaults,nofail 0 2` (`nofail`: the Pi still boots without the disk)
 
 ### Snapshots
 
@@ -795,7 +795,7 @@ sudo -u www-data php occ user:auth-tokens:delete <OBJECT_ID> <TOKEN_ID>
 - idempotent: files are only replaced when they differ, services only reloaded then; keys, database, Nextcloud install and OIDC provider are only created when missing
 - settings without secrets in `.env` (git-ignored, template `.env.example`); passwords and the client secret are asked for on the terminal and only when needed
 - test values in the configs (`cloud.homelab.test`, `admin`, the LAN) are replaced from `.env` while copying
-- not scripted: Entra, TOTP enrollment, the real certificate, the hosts entry on the PC
+- not scripted: Entra, TOTP enrollment, DNS records, the deSEC zone and token, the hosts entry on the PC (test names only)
 - not for a Pi that already runs Nextcloud, data migration is a separate step
 - secrets are read with visible input (`read -rp`): pasting blind into `read -s` over `ssh -t` from PowerShell went wrong several times; the value stays in the terminal scrollback, not in the history
 
@@ -816,6 +816,48 @@ Found while testing:
 - the client secret was empty after the first run, see `user_oidc` above; the provider is now created in one call
 - `user_oidc:provider` with only `--clientsecret-env` changes nothing, see `user_oidc` above
 
+## Phase 8: Portal and oauth2-proxy
+
+Steps and checks in `Manual_Setup.md`, everything else is in `setup-pi.sh`. Deployed and tested on `vps-test`/`pi-test` (2026-11-18), logout and account picker added later (2026-11-25).
+
+- own Entra app registration `portal`, separate from `nextcloud`; tiles come from app roles (`portal-admin`, `app-*`)
+- oauth2-proxy v7.15.6 from the GitHub release, checksum pinned in `setup-pi.sh`, listens on `127.0.0.1:4180`; nginx asks it per request (`auth_request`)
+- sessions in Redis db 1 (db 0 is Nextcloud): Entra sessions don't fit into one cookie, and with `auth_request` nginx passes on only the first `Set-Cookie`
+- `oidc_email_claim = preferred_username`: cloud-only users have no `email` claim, oauth2-proxy aborts the login without one
+- scope with `offline_access`, otherwise no refresh token and `cookie_refresh` can't get a new ID token
+- `prompt = select_account`: without it Entra silently takes whatever account the browser is signed in with, e.g. an admin without a portal role (#6)
+- logout: `/oauth2/sign_out` only drops the proxy session, the next request logs straight back in; `rd` goes on to the Entra logout, which sends the browser back to `https://portal.<domain>/` (has to be registered in Entra, with the trailing slash)
+- Angular build: `inlineCritical: false`, critical CSS inlining adds an `onload` handler that the CSP blocks
+
+## Phase 9: Let's Encrypt certificate and the bare domain
+
+Real domain bought at netcup (2026-11-25) together with the VPS; `pi-test` is connected to the real VPS. Steps and checks in `Manual_Setup.md`, decisions in ADR 0020 and 0021.
+
+### Certificate (2026-11-25)
+
+- the netcup CCP API can't see a zone on netcup CloudDNS: `StatusCode=5029 ... zone could not be found`; the lego provider for the new netcup API isn't released yet
+- `dedyn.io` names can't be registered at deSEC at the moment, so the deSEC zone is `acme.<domain>`, delegated with NS records at netcup
+- staging test first: lego follows the CNAME (`Found CNAME entry for "_acme-challenge.<domain>."`)
+- deSEC needs about two minutes until all its nameservers have the record; lego 4.9.1 waits only 60 s by default, `DESEC_PROPAGATION_TIMEOUT` fixes it
+- token policy check: writing anything outside `_acme-challenge.acme.<domain>` TXT gives `403`
+
+### Bare domain (2026-11-26)
+
+- `<domain>` alone didn't work: no A record to the VPS (netcup's default `@` record pointed elsewhere), not in the VPS map, and the wildcard doesn't cover the bare domain
+- netcup: changing the `@` A record first failed with "Eingabefehler", right after that the zone was locked ("Aktuell werden noch Änderungen aus einem vorherigen Änderungsvorgang übernommen"); a few minutes later the new record was there. Cause of the first error unknown
+- after the change all five netcup nameservers, 1.1.1.1 and 8.8.8.8 had the new address, the FRITZ!Box still answered with the old one until its TTL ran out (about 20 min); `ipconfig /flushdns` doesn't touch that, the box has no button for it
+- the browser keeps its own cache: `edge://net-internals/#dns` > Clear host cache
+- testing without DNS: `curl.exe --resolve <domain>:443:<VPS IP> ...`; the phone on mobile data worked right away
+- lego with both names: the wildcard authorization from the day before was still valid, only the bare domain got a DNS-01 challenge
+- first run for the bare domain failed: `403 ... Incorrect TXT record "..." found at _acme-challenge.<domain>`, although lego had seen the new record on the deSEC nameservers; the second run worked. Cause unknown (old value cached somewhere, or a deSEC node not updated yet)
+- nginx warned `duplicate extension "wasm"`: Debian 13 `mime.types` has it already, removed from the Nextcloud site
+- deploy test from snapshot `before-apex` (certificate without the bare domain): `setup-pi.sh` noticed it, lego got a new one with `run`, redirect works
+
+### Snapshots
+
+- `before-apex` (`pi-test`), before the bare domain changes
+- `apex-ok` (`pi-test`)
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
@@ -824,10 +866,12 @@ Found while testing:
 - [x] phase 5: reverse proxy on the Pi has to expect the PROXY header (`listen 443 ssl proxy_protocol`) and take the real IP only from `10.99.0.1`
 - [x] phase 5: write up the install steps (PHP, MariaDB, Nextcloud, certificate, nginx site)
 - [x] phase 6: local admin `ncadmin`: TOTP enforced (group `local-2fa`, ADR 0015)
-- [ ] phase 5: certificate on the Pi, TLS-ALPN-01 works through the passthrough without opening port 80
+- [x] phase 5: certificate on the Pi (DNS-01 through deSEC instead of TLS-ALPN-01, ADR 0020)
 - [x] phase 5: keep Global Admin out of Nextcloud (app role + group restriction in user_oidc, ADR 0013)
 - [x] reminder before the client secret expires (calendar, 4 weeks ahead)
 - [ ] go-live: test the real desktop and mobile clients (the phone can't resolve `cloud.homelab.test`, the PC already syncs with the production Pi)
-- [ ] after buying the domain: add it as custom domain in Entra, move the users' UPNs to it, own cloud-only admin account instead of the private one
+- [x] after buying the domain: add it as custom domain in Entra, move the users' UPNs to it
+- [ ] own cloud-only admin account instead of the private one
 - [ ] update Nextcloud to 35.0.3 along the documented update path
-- [ ] monitoring: Nextcloud update notification, client secret expiry, rate limit counters
+- [ ] monitoring: Nextcloud update notification, client secret expiry, rate limit counters, certificate renewal (Let's Encrypt sends no expiry mails anymore)
+- [ ] CI pipeline before the go-live
