@@ -3,6 +3,7 @@
 # usage: sudo bash scripts/setup-vps.sh   (reads .env from the repo root, or ENV_FILE)
 # safe to run again; run it twice on a fresh setup, see docs/Manual_Setup.md
 
+# shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 
 require_root

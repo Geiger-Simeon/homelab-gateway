@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # shared helpers for setup-vps.sh and setup-pi.sh, sourced, not run
 
 set -euo pipefail
