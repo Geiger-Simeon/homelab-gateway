@@ -874,4 +874,4 @@ Real domain bought at netcup (2026-11-25) together with the VPS; `pi-test` is co
 - [ ] own cloud-only admin account instead of the private one
 - [ ] update Nextcloud to 35.0.3 along the documented update path
 - [ ] monitoring: Nextcloud update notification, client secret expiry, rate limit counters, certificate renewal (Let's Encrypt sends no expiry mails anymore)
-- [ ] CI pipeline before the go-live
+- [x] CI pipeline before the go-live (#28)

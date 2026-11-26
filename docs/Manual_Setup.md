@@ -392,6 +392,26 @@ Then `deploy.ps1` as in phase 7. New prompt on the Pi: the deSEC token, only whi
 | phone, mobile data | both names, Nextcloud app | no certificate question |
 | PC | `deploy.ps1` again | no token prompt, no lego run |
 
+## Phase 10: CI and GitHub settings
+
+Workflows in `.github/workflows/`, Dependabot in `.github/dependabot.yml` ([ADR 0022](adr/0022-run-checks-in-github-actions-without-deploy-access.md)).
+
+| Where | Setting |
+|---|---|
+| Settings → Advanced Security | dependency graph, Dependabot alerts, Dependabot security updates (grouped), secret scanning with push protection on; no CodeQL default setup, `codeql.yml` does the analysis |
+| Settings → Actions → General | only actions created by GitHub; fork pull request workflows need approval; workflow token read-only, Actions may not create or approve pull requests |
+| Settings → Rules → Rulesets | `main`: no deletion, no force push, pull request required, all CI and CodeQL checks required |
+| github.com/settings/notifications | failed workflows and Dependabot alerts by mail and in the GitHub app |
+
+The dependency graph has to be on, otherwise `dependency-review` fails with `Forbidden`. gitleaks false positives go into `.gitleaksignore` by fingerprint.
+
+Verify:
+
+| Where | Command | Expected |
+|---|---|---|
+| PC | `gh pr checks <PR>` | every check `pass` |
+| PC | `gh workflow run pinned-versions.yml`, then `gh run list --workflow pinned-versions.yml --limit 1` | `completed success` while setup-pi.sh pins the latest oauth2-proxy |
+
 ## Open
 
 - [ ] fixed DHCP leases for both VMs
