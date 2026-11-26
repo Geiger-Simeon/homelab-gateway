@@ -218,6 +218,18 @@ class PortalControllerTest {
         result.andExpect(status().isNotFound());
     }
 
+    @Test
+    void givenAdminRole_whenCallingPathOutsideTheApi_thenForbidden() throws Exception {
+        // given
+        final var request = get("/actuator/health").with(admin());
+
+        // when
+        final var result = mvc.perform(request);
+
+        // then
+        result.andExpect(status().isForbidden());
+    }
+
     private static JwtRequestPostProcessor admin() {
         return user("portal-admin");
     }

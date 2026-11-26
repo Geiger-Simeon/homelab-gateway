@@ -1,5 +1,7 @@
 # homelab-gateway
 
+[![ci](https://github.com/Geiger-Simeon/homelab-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Geiger-Simeon/homelab-gateway/actions/workflows/ci.yml)
+
 Browser access to a self-hosted Nextcloud and a small portal on a Raspberry Pi at home, from any device and without a VPN. A small VPS is the public entry point. It passes the encrypted traffic through a WireGuard tunnel to the Pi and can't read any of it. Login goes through Microsoft Entra ID.
 
 ## How it works
@@ -25,6 +27,7 @@ Browser ---- HTTPS 443 ----> VPS ===== WireGuard =====> Raspberry Pi
 - login only with an Entra app role, the local Nextcloud admin needs TOTP
 - Let's Encrypt through DNS-01: the VPS keeps only 443 open, the token on the Pi can only write the challenge record, CAA allows only Let's Encrypt with DNS-01
 - SSH with keys only, automatic updates with a nightly reboot
+- every pull request is built, tested and scanned (CodeQL, gitleaks, dependency review, shellcheck), Dependabot keeps the dependencies current
 
 ## Stack
 
@@ -36,6 +39,7 @@ Browser ---- HTTPS 443 ----> VPS ===== WireGuard =====> Raspberry Pi
 ## Repository
 
 ```
+.github/   CI workflows and Dependabot
 configs/   config files per host (vps, pi), installed by the setup scripts
 scripts/   deploy.ps1 (runs everything from a Windows PC), setup-vps.sh, setup-pi.sh
 portal/    portal frontend and backend
@@ -70,4 +74,4 @@ Running `deploy.ps1` again only applies what changed. With `ACME_DOMAIN` left em
 - [`portal/README.md`](portal/README.md): local development of the portal
 ## Status
 
-Tested end to end in VMs and with the real domain; the real Pi is next. Still missing for regular operation: CI (linting, security scans) and monitoring (certificate expiry, availability, vulnerable packages).
+Tested end to end in VMs and with the real domain; the real Pi is next. CI runs on every pull request. Still missing for regular operation: monitoring (certificate expiry, availability, vulnerable packages on the hosts).

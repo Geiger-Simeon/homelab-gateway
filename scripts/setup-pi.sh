@@ -5,6 +5,7 @@
 # safe to run again, see docs/Manual_Setup.md
 # not for a pi that already runs nextcloud: data migration is a separate step
 
+# shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 
 NC_DIR=/var/www/nextcloud

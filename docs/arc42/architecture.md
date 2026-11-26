@@ -216,7 +216,15 @@ The Pi also runs an existing WireGuard VPN for my own devices, kept separate fro
 
 - Debian packages: unattended-upgrades on both hosts, Debian default origins (security and point releases), reboot if needed at 04:00 (VPS) and 04:30 (Pi), [ADR 0016](../adr/0016-install-updates-automatically-with-a-nightly-reboot.md)
 - Nextcloud: not installed through apt, updated by hand with the built-in updater after a snapshot / backup; `occ update:check` and the update notification in the admin UI show new versions
-- planned: uptime monitoring outside the Pi, alerts on vulnerabilities and available Nextcloud updates, client secret expiry, rate limit counters
+- portal dependencies and the pinned oauth2-proxy: Dependabot and a weekly CI job, see Build and checks
+- planned: uptime monitoring outside the Pi, alerts on available Nextcloud updates, client secret expiry, rate limit counters
+
+## Build and checks
+
+- GitHub Actions on every pull request and on `main` ([ADR 0022](../adr/0022-run-checks-in-github-actions-without-deploy-access.md)): backend `mvn verify`, frontend tests and build, shellcheck, PSScriptAnalyzer, gitleaks over the whole history, dependency review, CodeQL for Java, TypeScript and the workflows
+- Dependabot: Maven, npm and Actions weekly with 7 days cooldown, security updates right away; Angular majors by hand with `ng update`
+- weekly job: pinned oauth2-proxy against the latest release, a failed run sends a mail
+- actions pinned to commit SHAs, workflow token read-only, no deployment from CI
 
 # 9. Architecture Decisions
 
@@ -244,6 +252,7 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0019](../adr/0019-put-oauth2-proxy-in-front-of-the-portal.md) | oauth2-proxy in front of the portal, not Nextcloud | accepted |
 | [0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md) | Certificate with DNS-01 through deSEC | accepted, names amended by 0021 |
 | [0021](../adr/0021-redirect-the-bare-domain-to-the-portal.md) | Bare domain redirects to the portal | accepted |
+| [0022](../adr/0022-run-checks-in-github-actions-without-deploy-access.md) | Checks in GitHub Actions, no deployment from CI | accepted |
 
 # 10. Quality Requirements
 
@@ -276,7 +285,7 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | local admin login stays reachable via `/login?direct=1`              | strong password, brute force protection, TOTP enforced ([ADR 0015](../adr/0015-enforce-2fa-only-for-the-local-admin.md)) |
 | Azure for Students ends after studying; tenant without subscription isn't officially guaranteed | no Azure resources in the subscription; fallback Auth0, migration only affects the login layer |
 | client secrets of the Nextcloud and the portal app expire, login breaks | expiry dates in the password manager, calendar reminder 4 weeks ahead; later monitoring |
-| oauth2-proxy is a pinned binary, not updated by unattended-upgrades   | watch the GitHub releases, bump version and hash in `setup-pi.sh`; listens on loopback only |
+| oauth2-proxy is a pinned binary, not updated by unattended-upgrades   | weekly CI job fails when a newer release is out, then bump version and hash in `setup-pi.sh`; listens on loopback only |
 | certificate renewal fails unnoticed, Let's Encrypt sends no expiry mails anymore | daily timer, renewal 30 days ahead, `journalctl -u homelab-cert`; later monitoring |
 | deSEC, or the NS/CNAME records for it at netcup, break                | renewal fails as above; records in `Manual_Setup.md` phase 9 |
 | Nextcloud isn't updated by unattended-upgrades                         | `occ update:check`, update notification in the admin UI, documented update path; later monitoring |
@@ -291,6 +300,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | SNI filter is no access control, the domain becomes public via certificate transparency | only meant to cut scanner noise, login and updates on the Pi remain the real protection |
 | portal API, reachable directly on the Pi, could be called by another process without the auth proxy | API validates the Entra ID token forwarded by oauth2-proxy (issuer, `aud`, signature) in Spring Security, loopback bind stays as a second layer ([ADR 0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md)) |
 | Entra ID tokens expire after about one hour, the portal API would start returning 401 | oauth2-proxy `cookie_refresh` is shorter than the token lifetime so a new token is fetched in the background ([ADR 0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md)) |
+| a compromised GitHub Action or dependency runs in the CI | actions pinned to commit SHAs, read-only token, no secrets or host access in the CI, Dependabot cooldown of 7 days |
+| an update passes the CI but breaks something the tests don't cover | Dependabot pull requests merged by hand, deploy to the test VMs first |
 
 # 12. Glossary
 

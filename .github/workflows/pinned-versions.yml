@@ -1,0 +1,36 @@
+# weekly: is the oauth2-proxy pinned in setup-pi.sh still the latest release?
+# a failed scheduled run sends a mail, that's the reminder
+name: pinned-versions
+
+on:
+  schedule:
+    # monday 02:23 utc
+    - cron: "23 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oauth2-proxy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: compare with the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pinned=$(sed -nE 's/^OAUTH2_PROXY_VERSION=\$\{OAUTH2_PROXY_VERSION:-(v[0-9.]+)\}$/\1/p' scripts/setup-pi.sh)
+          latest=$(gh api repos/oauth2-proxy/oauth2-proxy/releases/latest --jq .tag_name)
+          echo "pinned: ${pinned:-?}, latest: $latest"
+          if [[ -z $pinned ]]; then
+            echo "::error::OAUTH2_PROXY_VERSION not found in scripts/setup-pi.sh"
+            exit 1
+          fi
+          if [[ $pinned != "$latest" ]]; then
+            echo "::error::oauth2-proxy $latest is out, setup-pi.sh pins $pinned (bump version and sha256)"
+            exit 1
+          fi
