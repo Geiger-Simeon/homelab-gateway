@@ -43,7 +43,14 @@ if ! grep -q '^include /etc/nginx/stream.d/\*.conf;' /etc/nginx/nginx.conf; then
     # has to be in the main context, after the http block
     echo 'include /etc/nginx/stream.d/*.conf;' >> /etc/nginx/nginx.conf
 fi
-render "$REPO_DIR/configs/vps/etc/nginx/stream.d/gateway.conf" /etc/nginx/stream.d/gateway.conf || true
+tmp=$(mktemp)
+if [[ -n ${ACME_DOMAIN:-} ]]; then
+    sed "s/^\([[:space:]]*\)homelab\.test /\1${ACME_DOMAIN} /" "$REPO_DIR/configs/vps/etc/nginx/stream.d/gateway.conf" > "$tmp"
+else
+    sed '/^[[:space:]]*homelab\.test /d; /the bare domain (ACME_DOMAIN)/d' "$REPO_DIR/configs/vps/etc/nginx/stream.d/gateway.conf" > "$tmp"
+fi
+render "$tmp" /etc/nginx/stream.d/gateway.conf || true
+rm -f "$tmp"
 nginx -t -q || die "nginx config invalid"
 systemctl enable -q nginx
 systemctl reload-or-restart nginx

@@ -97,11 +97,11 @@ flowchart LR
 |--------------------|------|------------------------------------------------------------------|--------------|
 | WireGuard server   | VPS  | endpoint of the tunnel, listens on UDP 51820                     | done (VM)    |
 | Firewall           | VPS  | nftables, only SSH, 443 and WireGuard, nothing new from the tunnel, rate limits for new SSH and HTTPS connections per IP | done (VM)  |
-| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames (`cloud`, `portal`) into the tunnel, adds the PROXY header, limits open connections per IP | done (VM) |
+| TCP/TLS proxy      | VPS  | nginx `stream` with `ssl_preread`, forwards 443 for known hostnames (`cloud`, `portal`, the bare domain) into the tunnel, adds the PROXY header, limits open connections per IP | done (VM) |
 | WireGuard client   | Pi   | connects to the VPS, keepalive 25 s                              | done (VM)    |
 | Firewall           | Pi   | nftables, from the tunnel only 443 from the VPS, SSH only from the LAN | done (VM) |
-| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud and the portal | done (VM) |
-| Certificate        | Pi   | wildcard `*.<domain>` from Let's Encrypt, DNS-01 through a deSEC subzone (`_acme-challenge` is a CNAME into it), lego from Debian, daily timer with a hook that copies it for nginx; `.test` names keep a self-signed one ([ADR 0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md)) | done (VM, real domain) |
+| Reverse proxy      | Pi   | nginx, reads the PROXY header, TLS termination, certificate, forwards to Nextcloud and the portal, redirects the bare domain to the portal ([ADR 0021](../adr/0021-redirect-the-bare-domain-to-the-portal.md)) | done (VM) |
+| Certificate        | Pi   | `*.<domain>` and `<domain>` in one certificate from Let's Encrypt, DNS-01 through a deSEC subzone (`_acme-challenge` is a CNAME into it), lego from Debian, daily timer with a hook that copies it for nginx; `.test` names keep a self-signed one ([ADR 0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md)) | done (VM, real domain) |
 | Nextcloud          | Pi   | application, data on the separate data disk                      | done (VM), exists on the real Pi |
 | `user_oidc`        | Pi   | OIDC login against Entra ID, maps app roles to groups, rejects users without an `nc-` role | done (VM) |
 | Portal frontend    | Pi   | Angular start page, tiles per app role, system overview for `portal-admin`, served by nginx as static files | done (VM) |
@@ -242,7 +242,8 @@ Each decision is recorded as an ADR in [`docs/adr/`](../adr/), with context, rej
 | [0017](../adr/0017-build-the-portal-with-angular-and-spring-boot.md) | Portal with Angular and Spring Boot | accepted, auth part amended by 0018 |
 | [0018](../adr/0018-validate-the-entra-id-token-in-the-portal-api.md) | Validate the Entra ID token in the portal API | accepted, Nextcloud part corrected by 0019 |
 | [0019](../adr/0019-put-oauth2-proxy-in-front-of-the-portal.md) | oauth2-proxy in front of the portal, not Nextcloud | accepted |
-| [0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md) | Certificate with DNS-01 through deSEC | accepted |
+| [0020](../adr/0020-get-the-certificate-with-dns-01-through-desec.md) | Certificate with DNS-01 through deSEC | accepted, names amended by 0021 |
+| [0021](../adr/0021-redirect-the-bare-domain-to-the-portal.md) | Bare domain redirects to the portal | accepted |
 
 # 10. Quality Requirements
 

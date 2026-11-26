@@ -4,7 +4,7 @@ Date: 2026-11-25
 
 ## Status
 
-Accepted
+Accepted, certificate names amended by [ADR 0021](0021-redirect-the-bare-domain-to-the-portal.md)
 
 ## Context
 

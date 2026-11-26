@@ -312,7 +312,7 @@ Token refresh: keep the portal open longer than an hour (ID token lifetime), the
 
 ## Phase 9: Let's Encrypt certificate
 
-Real domain only; with `.test` names `setup-pi.sh` keeps the self-signed certificates. One wildcard certificate `*.<domain>` through DNS-01. netcup stays the DNS provider, only `acme.<domain>` is delegated to deSEC, and the token on the Pi may only write the challenge record there ([ADR 0020](adr/0020-get-the-certificate-with-dns-01-through-desec.md)).
+Real domain only; with `.test` names `setup-pi.sh` keeps the self-signed certificates. One certificate for `*.<domain>` and `<domain>` through DNS-01; the bare domain redirects to the portal ([ADR 0021](adr/0021-redirect-the-bare-domain-to-the-portal.md)). netcup stays the DNS provider, only `acme.<domain>` is delegated to deSEC, and the token on the Pi may only write the challenge record there ([ADR 0020](adr/0020-get-the-certificate-with-dns-01-through-desec.md)).
 
 DNS at netcup (CCP > Domains > the domain > DNS, deploying the zone takes a few minutes):
 
@@ -320,10 +320,13 @@ DNS at netcup (CCP > Domains > the domain > DNS, deploying the zone takes a few 
 |------|------|-------------|
 | `cloud` | A | VPS IPv4 |
 | `portal` | A | VPS IPv4 |
+| `@` | A | VPS IPv4, replaces netcup's default record |
 | `acme` | NS | `ns1.desec.io.` |
 | `acme` | NS | `ns2.desec.org.` |
 | `_acme-challenge` | CNAME | `_acme-challenge.acme.<domain>.` |
 | `@` | CAA | `0 issue "letsencrypt.org; validationmethods=dns-01"` |
+
+If the zone has an `@` AAAA record, remove it, IPv6 isn't set up on the VPS. While netcup deploys a change, the zone is locked ("Aktuell werden noch Änderungen ... übernommen"), wait a few minutes. Resolvers keep the old `@` record for its TTL; the local router may still answer with it after 1.1.1.1 has the new one.
 
 The CAA record keeps every other CA and every other challenge type out; a compromised VPS sees the traffic for the domain but can't answer DNS-01.
 
@@ -381,7 +384,10 @@ Then `deploy.ps1` as in phase 7. New prompt on the Pi: the deSEC token, only whi
 | Pi | serial before and after `sudo /usr/local/sbin/homelab-cert 90` (forced renewal, costs one certificate of the weekly limit) | `certificate deployed for ...`, new serial in `/etc/ssl/nginx/` |
 | PC | `curl.exe -s -o NUL -w "%{http_code} verify=%{ssl_verify_result}" https://<NC_DOMAIN>/status.php` | `200 verify=0`, without `-k` |
 | PC | same for `https://<PORTAL_DOMAIN>/` | `302 verify=0` |
-| browser | both names | padlock, no warning; turn warnings back on where they were skipped for the test certificate |
+| Pi | `sudo openssl x509 -in /etc/ssl/nginx/<PORTAL_DOMAIN>.crt -noout -ext subjectAltName` | `DNS:*.<domain>, DNS:<domain>` |
+| PC | `curl.exe -s -o NUL -w "%{http_code} %{redirect_url} verify=%{ssl_verify_result}" https://<domain>/` (`--resolve <domain>:443:<VPS IP>` while DNS still has the old record) | `302 https://<PORTAL_DOMAIN>/ verify=0` |
+| browser | `<domain>` | Microsoft login, then the portal |
+| browser | `cloud` and `portal` | padlock, no warning; turn warnings back on where they were skipped for the test certificate |
 | portal | Nextcloud tile | online, the JVM trusts Let's Encrypt without the test CA |
 | phone, mobile data | both names, Nextcloud app | no certificate question |
 | PC | `deploy.ps1` again | no token prompt, no lego run |

@@ -205,8 +205,10 @@ if [[ -n ${ACME_DOMAIN:-} ]]; then
     fi
     systemctl enable -q --now homelab-cert.timer
     acme_crt="/var/lib/lego/certificates/_.$ACME_DOMAIN.crt"
-    # the first certificate takes a few minutes (desec propagation), renewals are the timer's job
-    if [[ ! -f $acme_crt ]]; then
+    # the first certificate takes a few minutes (desec propagation), renewals are the timer's job;
+    # also when an older one lacks the bare domain
+    if [[ ! -f $acme_crt ]] \
+        || ! openssl x509 -in "$acme_crt" -noout -ext subjectAltName | grep -qE "DNS:${ACME_DOMAIN//./\\.}(,|\$)"; then
         /usr/local/sbin/homelab-cert \
             || warn "no let's encrypt certificate, the test one stays (rerun /usr/local/sbin/homelab-cert to see why)"
     fi
@@ -245,6 +247,15 @@ sed "s/<TENANT_ID>/${ENTRA_TENANT_ID}/" "$REPO_DIR/configs/pi/etc/nginx/sites-av
 render "$tmp" /etc/nginx/sites-available/portal.conf || true
 rm -f "$tmp"
 ln -sf /etc/nginx/sites-available/portal.conf /etc/nginx/sites-enabled/portal.conf
+if [[ -n ${ACME_DOMAIN:-} ]]; then
+    tmp=$(mktemp)
+    sed "s/server_name homelab\.test;/server_name ${ACME_DOMAIN};/" "$REPO_DIR/configs/pi/etc/nginx/sites-available/apex.conf" > "$tmp"
+    render "$tmp" /etc/nginx/sites-available/apex.conf || true
+    rm -f "$tmp"
+    ln -sf /etc/nginx/sites-available/apex.conf /etc/nginx/sites-enabled/apex.conf
+else
+    rm -f /etc/nginx/sites-enabled/apex.conf
+fi
 # self checks go over loopback, see docs/NOTES.md
 grep -qE "^127\.0\.0\.1[[:space:]]+${NC_DOMAIN//./\\.}\$" /etc/hosts || echo "127.0.0.1 $NC_DOMAIN" >> /etc/hosts
 nginx -t -q || die "nginx config invalid"

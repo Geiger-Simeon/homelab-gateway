@@ -1,6 +1,6 @@
 #!/bin/bash
 # /usr/local/sbin/homelab-cert on the pi, written by setup-pi.sh
-# gets or renews the wildcard certificate (lego, dns-01 through desec), run by homelab-cert.timer
+# gets or renews the certificate for *.ACME_DOMAIN and ACME_DOMAIN (lego, dns-01 through desec), run by homelab-cert.timer
 # optional argument: days left before renewing (default 30), a higher value forces a renewal
 set -euo pipefail
 
@@ -12,8 +12,11 @@ export DESEC_TOKEN
 # desec needs about two minutes until all its nameservers have the record, lego 4.9 waits 60 s by default
 export DESEC_PROPAGATION_TIMEOUT=600 DESEC_POLLING_INTERVAL=10
 
-args=(--accept-tos --email "$ACME_EMAIL" --dns desec --domains "*.$ACME_DOMAIN" --path /var/lib/lego)
-if [[ -f /var/lib/lego/certificates/_.$ACME_DOMAIN.crt ]]; then
+args=(--accept-tos --email "$ACME_EMAIL" --dns desec --domains "*.$ACME_DOMAIN" --domains "$ACME_DOMAIN" --path /var/lib/lego)
+crt=/var/lib/lego/certificates/_.$ACME_DOMAIN.crt
+# a certificate from before the bare domain was added gets replaced right away,
+# not sure renew in lego 4.9 picks up a changed domain list
+if [[ -f $crt ]] && openssl x509 -in "$crt" -noout -ext subjectAltName | grep -qE "DNS:${ACME_DOMAIN//./\\.}(,|\$)"; then
     lego "${args[@]}" renew --days "${1:-30}" --renew-hook /usr/local/sbin/homelab-cert-deploy
 else
     lego "${args[@]}" run --run-hook /usr/local/sbin/homelab-cert-deploy
