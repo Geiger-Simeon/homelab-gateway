@@ -9,7 +9,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
@@ -25,8 +24,9 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtGra
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
- * Validates the Entra ID token nginx forwards as a Bearer. No session, no CSRF, loopback binding stays
- * as the second layer.
+ * Validates the Entra ID token nginx forwards as a Bearer. No session, loopback binding stays as the
+ * second layer. CSRF stays on for requests without a token; Spring skips it for Bearer requests, the
+ * oauth2-proxy cookie in front of them is SameSite=lax.
  */
 @Configuration
 public class SecurityConfig {
@@ -42,7 +42,6 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain filterChain(final HttpSecurity http) throws Exception {
         http
-                .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers("/error").permitAll()
